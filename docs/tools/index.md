@@ -515,6 +515,39 @@ Notes:
 - Result is restricted to per-agent allowlists (`agents.list[].subagents.allowAgents`).
 - When `["*"]` is configured, the tool includes all configured agents and marks `allowAny: true`.
 
+### `memory_search`
+
+Semantically search memory files (and optional transcript memory) for prior context.
+
+Core parameters:
+
+- `query` (required) — search query string
+- `maxResults` (optional) — max results to return
+- `minScore` (optional) — minimum score threshold
+
+Notes:
+
+- Returns snippets with `path`, `startLine`, `endLine`, and `score`.
+- Availability depends on memory search configuration; unavailable states return `disabled: true` with guidance.
+- Uses the configured memory provider and can fall back to the builtin provider when embeddings are unavailable.
+- For setup, storage layout, and provider behavior, see [Memory Concepts](/concepts/memory).
+
+### `memory_get`
+
+Read a specific memory file by workspace-relative path.
+
+Core parameters:
+
+- `path` (required) — workspace-relative memory path (for example `MEMORY.md` or `memory/2026-03-14.md`)
+- `from` (optional) — start line number (1-indexed)
+- `lines` (optional) — max lines to read
+
+Notes:
+
+- Paths are restricted to `MEMORY.md` and configured memory roots.
+- Use after `memory_search` to fetch only needed line ranges and keep context small.
+- For configuration and allowlist behavior (including transcript indexing and extra paths), see [Memory Concepts](/concepts/memory).
+
 ## Parameters (common)
 
 Gateway-backed tools (`canvas`, `nodes`, `cron`):
