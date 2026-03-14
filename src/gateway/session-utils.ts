@@ -163,6 +163,10 @@ export function deriveSessionTitle(
     return entry.subject.trim();
   }
 
+  if (entry.label?.trim()) {
+    return entry.label.trim();
+  }
+
   if (firstUserMessage?.trim()) {
     const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
