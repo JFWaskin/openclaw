@@ -525,6 +525,35 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry)).toBe("Dev Team Chat");
   });
 
+  test("displayName takes priority over label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      displayName: "Override",
+      label: "Should Not Appear",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Override");
+  });
+
+  test("subject takes priority over label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      subject: "Room Title",
+      label: "Should Not Appear",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Room Title");
+  });
+
+  test("uses label when displayName and subject are missing", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      label: "Label Title",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, "Should Not Appear")).toBe("Label Title");
+  });
+
   test("uses first user message when displayName and subject missing", () => {
     const entry = {
       sessionId: "abc123",
