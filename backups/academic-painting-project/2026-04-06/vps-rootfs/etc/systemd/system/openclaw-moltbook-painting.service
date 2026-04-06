@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenClaw Moltbook Academic Painting Worker
+After=network-online.target openclaw-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+Environment=HOME=/var/lib/openclaw
+ExecStart=/opt/openclaw/bin/moltbook_painting_worker.sh
+TimeoutStartSec=9min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/openclaw /tmp
+
+[Install]
+WantedBy=multi-user.target
