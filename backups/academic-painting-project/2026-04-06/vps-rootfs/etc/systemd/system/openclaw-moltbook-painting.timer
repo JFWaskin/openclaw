@@ -1,0 +1,12 @@
+[Unit]
+Description=Run OpenClaw Moltbook Academic Painting Worker every 6 hours
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=6h
+AccuracySec=1min
+Persistent=true
+Unit=openclaw-moltbook-painting.service
+
+[Install]
+WantedBy=timers.target

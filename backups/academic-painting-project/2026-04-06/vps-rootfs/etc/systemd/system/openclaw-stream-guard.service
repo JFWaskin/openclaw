@@ -1,0 +1,7 @@
+[Unit]
+Description=OpenClaw stream guard
+
+[Service]
+Type=oneshot
+Environment=HOME=/var/lib/openclaw
+ExecStart=/opt/openclaw/bin/openclaw_stream_guard.sh
