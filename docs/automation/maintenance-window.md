@@ -144,6 +144,19 @@ These fields are read-only and are cleared when the phase exits.
 - **`allowManualRun` is global.** v2 has no per-agent or per-job override;
   a future v3 may add it.
 
+## Configuration reload behaviour
+
+`cron.maintenance.*` is read by the cron service at construction time.
+Editing the block and triggering `openclaw config reload` does not push
+the new window or roster into a running cron service instance; the change
+takes effect after the next gateway (re)start. Live hot reload of the
+maintenance block is a v3 follow-up.
+
+If you are rolling the maintenance window into production on a long-lived
+gateway, plan a short restart window to pick up the change. The same
+applies to `agents.defaults.userTimezone` changes that affect the default
+fallback for an omitted `window.timezone`.
+
 ## What changed vs #79192
 
 This is a v2 rewrite of the original `feat(cron): add maintenance-window

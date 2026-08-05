@@ -1,3 +1,5 @@
+import { recordMaintenanceDeferral } from "../maintenance-deferred.js";
+import { resolveMaintenancePhaseForCron } from "../maintenance-policy.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronJob } from "../types.js";
 import {
@@ -60,6 +62,24 @@ export function isRunnableJob(params: {
   }
   if (!isJobEnabled(job)) {
     return false;
+  }
+  // Maintenance-window gate (scheduled). Sits *before* skipJobIds / active
+  // markers so the maintenance deferral is recorded even when the job is
+  // otherwise uninteresting. Mirrors `inspectManualRunPreflight` so the
+  // scheduled and manual paths produce the same observable behaviour.
+  const maintenance = params.state.deps.cronConfig?.maintenance;
+  if (maintenance?.enabled) {
+    const agentId = job.agentId ?? params.state.deps.defaultAgentId ?? "main";
+    const phase = resolveMaintenancePhaseForCron({
+      maintenance,
+      userTimezone: params.state.deps.userTimezone,
+      nowMs,
+      agentId,
+    });
+    if (phase.phase === "maintenance" && !phase.allowed) {
+      recordMaintenanceDeferral({ jobId: job.id, agentId, nowMs });
+      return false;
+    }
   }
   if (params.skipJobIds?.has(job.id)) {
     return false;

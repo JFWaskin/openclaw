@@ -1,5 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { listMaintenanceDeferrals } from "../maintenance-deferred.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -87,6 +88,20 @@ export function applyJobResult(
     pacedNextRunAtMs: job.state.pacedNextRunAtMs,
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
+  // Maintenance diagnostics projection: when this job was deferred by the
+  // maintenance window, the in-memory deferred queue holds the proof. We
+  // mirror the live entry into `job.state` so the protocol-level
+  // `deferredMaintenanceCount` / `firstDeferredMaintenanceAtMs` /
+  // `lastDeferredMaintenanceAtMs` fields have a canonical producer.
+  // Lookup is O(N) over the backlog; the backlog is bounded by the number
+  // of distinct jobs deferred during a single maintenance phase, which is
+  // small in practice.
+  const maintenanceEntry = listMaintenanceDeferrals().find((entry) => entry.jobId === job.id);
+  if (maintenanceEntry) {
+    job.state.deferredMaintenanceCount = (job.state.deferredMaintenanceCount ?? 0) + 1;
+    job.state.firstDeferredMaintenanceAtMs = maintenanceEntry.firstDeferredAtMs;
+    job.state.lastDeferredMaintenanceAtMs = maintenanceEntry.lastDeferredAtMs;
+  }
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.state.pacedNextRunAtMs = undefined;
