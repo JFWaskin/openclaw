@@ -201,6 +201,11 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
+export type DiagnosticsAnthropicPayloadLogConfig = {
+  enabled?: boolean;
+  filePath?: string;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
@@ -209,6 +214,7 @@ export type DiagnosticsConfig = {
   stuckSessionWarnMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
+  anthropicPayloadLog?: DiagnosticsAnthropicPayloadLogConfig;
 };
 
 export type WebReconnectConfig = {

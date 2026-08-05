@@ -508,6 +508,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
+  "diagnostics.anthropicPayloadLog.enabled":
+    "Log Anthropic request payloads + usage for embedded runs (default: false).",
+  "diagnostics.anthropicPayloadLog.filePath":
+    "JSONL output path for Anthropic payload logs (default: $OPENCLAW_STATE_DIR/logs/anthropic-payload.jsonl).",
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.workspaceOnly":

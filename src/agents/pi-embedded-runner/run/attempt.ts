@@ -1215,6 +1215,7 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
       const anthropicPayloadLogger = createAnthropicPayloadLogger({
+        cfg: params.config,
         env: process.env,
         runId: params.runId,
         sessionId: activeSession.sessionId,
@@ -1940,7 +1941,7 @@ export async function runEmbeddedAttempt(
               ? "prompt error"
               : undefined,
         });
-        anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
+        anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError, prePromptMessageCount);
 
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await

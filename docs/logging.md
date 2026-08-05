@@ -96,6 +96,29 @@ Console logs are **TTY-aware** and formatted for readability:
 
 Console formatting is controlled by `logging.consoleStyle`.
 
+## Anthropic payload log (debugging)
+
+For Anthropic-only runs, you can enable a dedicated JSONL log that captures the
+exact request payload (as sent) plus per-run usage stats. This log includes full
+prompt/message data; treat it as sensitive.
+
+```json
+{
+  "diagnostics": {
+    "anthropicPayloadLog": {
+      "enabled": true,
+      "filePath": "/path/to/anthropic-payload.jsonl"
+    }
+  }
+}
+```
+
+Defaults + overrides:
+
+- Default path: `$OPENCLAW_STATE_DIR/logs/anthropic-payload.jsonl`
+- Env enable: `OPENCLAW_ANTHROPIC_PAYLOAD_LOG=1`
+- Env path: `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE=/path/to/anthropic-payload.jsonl`
+
 ## Configuring logging
 
 All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
