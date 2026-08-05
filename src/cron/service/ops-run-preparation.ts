@@ -1,5 +1,7 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { recordMaintenanceDeferral } from "../maintenance-deferred.js";
+import { isManualRunAllowed } from "../maintenance-policy.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronJob, CronPayload, CronRunErrorClassification } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
@@ -42,7 +44,8 @@ type PreparedManualRun =
         | "not-due"
         | "invalid-spec"
         | "restart-recovery-pending"
-        | "stopped";
+        | "stopped"
+        | "maintenance-blocked";
     }
   | {
       ok: true;
@@ -252,6 +255,29 @@ async function inspectManualRunPreflight(
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
+    // Maintenance gate (manual). When the window is active and this agent is
+    // not allowed, record the deferral and reject with `maintenance-blocked`.
+    // `mode === "force"` is the operator-initiated bypass; the upstream
+    // `isManualRunAllowed` also honours `cron.maintenance.allowManualRun` for
+    // non-force runs.
+    if (mode !== "force") {
+      const maintenance = state.deps.cronConfig?.maintenance;
+      if (maintenance?.enabled) {
+        const agentId = job.agentId ?? state.deps.defaultAgentId ?? "main";
+        const allowed = isManualRunAllowed({
+          cfg: {
+            agents: { defaults: { userTimezone: state.deps.userTimezone } },
+            cron: { maintenance },
+          },
+          nowMs: now,
+          agentId,
+        });
+        if (!allowed) {
+          recordMaintenanceDeferral({ jobId: job.id, agentId, nowMs: now });
+          return { ok: true, ran: false, reason: "maintenance-blocked" } as const;
+        }
+      }
+    }
     const due = isJobDue(job, now, { forced: mode === "force" });
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" } as const;
