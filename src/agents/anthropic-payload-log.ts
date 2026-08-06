@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -33,14 +34,22 @@ type PayloadLogConfig = {
   filePath: string;
 };
 
+type PayloadLogInit = {
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+};
+
 type PayloadLogWriter = QueuedFileWriter;
 
 const writers = new Map<string, PayloadLogWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
 
-function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
-  const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
-  const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
+function resolvePayloadLogConfig(params: PayloadLogInit): PayloadLogConfig {
+  const env = params.env ?? process.env;
+  const config = params.cfg?.diagnostics?.anthropicPayloadLog;
+  const envEnabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG);
+  const enabled = envEnabled ?? config?.enabled ?? false;
+  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
@@ -79,8 +88,14 @@ function isAnthropicModel(model: Model<Api> | undefined | null): boolean {
   return (model as { api?: unknown })?.api === "anthropic-messages";
 }
 
-function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknown> | null {
+function findLastAssistantUsage(
+  messages: AgentMessage[],
+  minIndex = 0,
+): Record<string, unknown> | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (i < minIndex) {
+      break;
+    }
     const msg = messages[i] as { role?: unknown; usage?: unknown };
     if (msg?.role === "assistant" && msg.usage && typeof msg.usage === "object") {
       return msg.usage as Record<string, unknown>;
@@ -91,11 +106,13 @@ function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknow
 
 export type AnthropicPayloadLogger = {
   enabled: true;
+  filePath: string;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
-  recordUsage: (messages: AgentMessage[], error?: unknown) => void;
+  recordUsage: (messages: AgentMessage[], error?: unknown, baselineMessageCount?: number) => void;
 };
 
 export function createAnthropicPayloadLogger(params: {
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runId?: string;
   sessionId?: string;
@@ -107,8 +124,11 @@ export function createAnthropicPayloadLogger(params: {
   writer?: PayloadLogWriter;
 }): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
-  const cfg = resolvePayloadLogConfig(env);
+  const cfg = resolvePayloadLogConfig({ env, cfg: params.cfg });
   if (!cfg.enabled) {
+    return null;
+  }
+  if (params.modelApi !== "anthropic-messages") {
     return null;
   }
 
@@ -155,8 +175,12 @@ export function createAnthropicPayloadLogger(params: {
     return wrapped;
   };
 
-  const recordUsage: AnthropicPayloadLogger["recordUsage"] = (messages, error) => {
-    const usage = findLastAssistantUsage(messages);
+  const recordUsage: AnthropicPayloadLogger["recordUsage"] = (
+    messages,
+    error,
+    baselineMessageCount,
+  ) => {
+    const usage = findLastAssistantUsage(messages, baselineMessageCount ?? 0);
     const errorMessage = formatError(error);
     if (!usage) {
       if (errorMessage) {
@@ -183,6 +207,6 @@ export function createAnthropicPayloadLogger(params: {
     });
   };
 
-  log.info("anthropic payload logger enabled", { filePath: writer.filePath });
-  return { enabled: true, wrapStreamFn, recordUsage };
+  log.info("anthropic payload logger enabled", { filePath: cfg.filePath });
+  return { enabled: true, filePath: cfg.filePath, wrapStreamFn, recordUsage };
 }
