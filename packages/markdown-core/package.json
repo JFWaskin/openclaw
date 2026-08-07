@@ -55,6 +55,9 @@
       "default": "./dist/types.mjs"
     }
   },
+  "scripts": {
+    "build": "node ../../scripts/build-workspace-package.mjs markdown-core"
+  },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
     "mdast-util-from-markdown": "2.0.3",

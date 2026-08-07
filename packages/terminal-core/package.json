@@ -100,6 +100,9 @@
       "default": "./dist/theme.mjs"
     }
   },
+  "scripts": {
+    "build": "node ../../scripts/build-workspace-package.mjs terminal-core"
+  },
   "dependencies": {
     "@clack/prompts": "1.7.0",
     "@openclaw/normalization-core": "workspace:*",

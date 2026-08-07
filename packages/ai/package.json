@@ -92,6 +92,9 @@
       "default": "./dist/internal/shared.mjs"
     }
   },
+  "scripts": {
+    "build": "node ../../scripts/build-workspace-package.mjs ai"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "0.115.0",
     "@google/genai": "2.13.0",
