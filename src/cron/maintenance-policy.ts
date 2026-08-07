@@ -237,7 +237,9 @@ function zonedDateTimeToUtcMs(
         // instant, which is the conventional "next time HH:MM arrives".
         let max = targetAsUtc;
         for (const v of visited) {
-          if (v > max) max = v;
+          if (v > max) {
+            max = v;
+          }
         }
         return max;
       }
@@ -405,4 +407,90 @@ export function resolveMaintenancePhaseForCron(params: {
     nowMs: params.nowMs,
     agentId: params.agentId,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler-owned phase transition reconciliation.
+//
+// The maintenance phase can change between two cron ticks (e.g. the window
+// opens at 02:00 LA, the next tick after 02:00 sees phase=maintenance for the
+// first time; the tick after 04:00 LA sees phase=normal again). The deferred
+// queue has two pieces of state that depend on which phase we are in:
+//
+//   * active phase id: bumped every time the window opens, so a backfilled
+//     deferral can be distinguished from a fresh one.
+//   * backlog entries: cleared when the window closes, so a stale entry from
+//     a previous window does not leak into the next.
+//
+// The cron timer tick owns both transitions; without it, `beginMaintenancePhase`
+// and `clearMaintenanceDeferrals` would never be called, and the deferred
+// queue's contract would be violated silently. `reconcileMaintenancePhaseTransition`
+// is idempotent: calling it on every tick is cheap, and only the *transition*
+// (previous != current) does work.
+
+import {
+  beginMaintenancePhase,
+  clearMaintenanceDeferrals,
+  listMaintenanceDeferrals,
+} from "./maintenance-deferred.js";
+import type { CronServiceState } from "./service/state.js";
+
+export type MaintenancePhaseTransition = {
+  previous: MaintenancePhase | undefined;
+  current: MaintenancePhase;
+  /** Number of entries drained on a maintenance -> normal transition. */
+  drainedCount: number;
+  /** True if a normal -> maintenance transition bumped the phase id. */
+  phaseBegan: boolean;
+};
+
+/**
+ * Inspect the maintenance phase at `nowMs`, compare to the state's last known
+ * phase, and apply the appropriate queue action:
+ *
+ *   - undefined -> anything: just record the current phase.
+ *   - normal -> maintenance: bump the phase id so subsequent deferrals bind
+ *     to the new window.
+ *   - maintenance -> normal: drain the deferred backlog in FIFO order, then
+ *     clear the queue. The scheduler's next tick re-evaluates the job store
+ *     and admits any due jobs naturally.
+ *   - same -> same: no-op.
+ */
+export function reconcileMaintenancePhaseTransition(
+  state: CronServiceState,
+  nowMs: number,
+): MaintenancePhaseTransition {
+  const decision = resolveMaintenancePhaseForCron({
+    maintenance: state.deps.cronConfig?.maintenance,
+    userTimezone: state.deps.userTimezone,
+    nowMs,
+    agentId: "__phase_probe__",
+  });
+  const current: MaintenancePhase = decision.phase;
+  const previous = state.lastMaintenancePhase;
+
+  let drainedCount = 0;
+  let phaseBegan = false;
+
+  if (previous !== current) {
+    if (current === "maintenance") {
+      // normal (or undefined) -> maintenance: bump the phase id so subsequent
+      // deferrals bind to the new window.
+      beginMaintenancePhase(nowMs);
+      phaseBegan = true;
+    } else if (previous === "maintenance") {
+      // maintenance -> normal: drain and clear. The actual job admit happens
+      // on the next tick; we just retire the bookkeeping here. We deliberately
+      // do NOT drain on `undefined -> normal`: a stale entry that survived a
+      // service restart is the responsibility of the restart recovery, not
+      // the phase transition.
+      drainedCount = listMaintenanceDeferrals().length;
+      clearMaintenanceDeferrals();
+    }
+    // undefined -> normal: no-op (no bump, no drain). The first tick just
+    // records the current phase.
+  }
+
+  state.lastMaintenancePhase = current;
+  return { previous, current, drainedCount, phaseBegan };
 }

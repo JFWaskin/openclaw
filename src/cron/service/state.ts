@@ -297,6 +297,13 @@ export type CronServiceState = {
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
+  /**
+   * Last maintenance phase observed by the scheduler tick. `undefined` until
+   * the first tick after service start records a phase. Used to detect the
+   * normal <-> maintenance transition so the deferred-queue phase id is
+   * bumped on entry and the backlog is drained on exit.
+   */
+  lastMaintenancePhase?: "normal" | "maintenance";
 };
 
 /** Creates mutable cron service state with a concrete clock dependency. */
