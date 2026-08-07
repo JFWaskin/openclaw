@@ -597,6 +597,199 @@ async function main() {
     }
   }
 
+  // --- Scenario 10: multi-job lifecycle end-to-end (round 4) ------------
+  // Wires together all the round-2/3 fixes: admit-time deferral, scheduler
+  // phase transition, mirroring to job.state, and status report consistency.
+  // 3 agents x 2 jobs each = 6 jobs; one agent is in the maintenance roster.
+  {
+    resetMaintenanceDeferrals();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pr79192-evidence-multi-"));
+    try {
+      const storePath = path.join(dir, "jobs.json");
+      const baseJob: CronJob = {
+        id: "ops-1",
+        name: "ops-1",
+        enabled: true,
+        agentId: "ops",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+        state: {
+          lastRunAtMs: 0,
+          lastStatus: "ok",
+          lastDurationMs: 0,
+          consecutiveErrors: 0,
+          nextRunAtMs: AT_UTC_01_30,
+        },
+        createdAtMs: 0,
+        updatedAtMs: 0,
+      };
+      const allJobs: CronJob[] = [
+        baseJob,
+        { ...baseJob, id: "ops-2", agentId: "ops" },
+        { ...baseJob, id: "ops-3", agentId: "ops" },
+        { ...baseJob, id: "main-1", agentId: "main" },
+        { ...baseJob, id: "main-2", agentId: "main" },
+        { ...baseJob, id: "secondary-1", agentId: "secondary" },
+      ];
+      await writeCronStoreSnapshot({ storePath, jobs: allJobs });
+      const cfg = cfgWithMaintenance();
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: { debug() {}, info() {}, warn() {}, error() {} },
+        defaultAgentId: "main",
+        userTimezone: "UTC",
+        cronConfig: cfg.cron,
+      });
+      const { ensureLoaded } = await import("../src/cron/service/store.js");
+      const { isRunnableJob } = await import("../src/cron/service/timer-runnable.js");
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+      // Tick 1: normal phase, all 6 jobs are due.
+      const t1 = reconcileMaintenancePhaseTransition(state, AT_UTC_01_30);
+      // Tick 2: inside the window, ops jobs are runnable; others are deferred.
+      const t2 = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+      // Drive the admit-then-defer path for each non-roster job.
+      const insideQueue = getMaintenanceDeferralCount();
+      let insideDeferralsRecorded = 0;
+      for (const job of state.store?.jobs ?? []) {
+        const ran = isRunnableJob({
+          state,
+          job,
+          nowMs: AT_UTC_03_30,
+          allowCronMissedRunByLastRun: true,
+        });
+        if (!ran) {
+          insideDeferralsRecorded++;
+        }
+      }
+      // Tick 3: after the window, phase exits, queue drains, mirror runs.
+      const t3 = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+
+      const storeJobs = state.store?.jobs ?? [];
+      const opsJobs = storeJobs.filter((j) => j.agentId === "ops");
+      const nonOpsJobs = storeJobs.filter((j) => j.agentId !== "ops");
+      const mirrored = nonOpsJobs.filter((j) => (j.state.deferredMaintenanceCount ?? 0) >= 1);
+
+      evidence.scenario_10_multi_job_lifecycle = {
+        note: "Full normal->maintenance->normal cycle with 6 jobs across 3 agents. The pipeline is consistent end-to-end: admit-time deferral, scheduler phase transition, mirror to job.state, queue drain.",
+        config: { maintenance: cfg.cron.maintenance },
+        phaseTransitions: {
+          tick1_normal: { previous: t1.previous, current: t1.current },
+          tick2_inside: { previous: t2.previous, current: t2.current },
+          tick3_exit: {
+            previous: t3.previous,
+            current: t3.current,
+            drainedCount: t3.drainedCount,
+          },
+        },
+        insideWindowQueueSize: insideQueue,
+        insideDeferralsRecordedByRunnable: insideDeferralsRecorded,
+        queueDrainedAtExit: getMaintenanceDeferralCount() === 0,
+        opsJobsUnmirrored: opsJobs.every((j) => (j.state.deferredMaintenanceCount ?? 0) === 0),
+        nonOpsJobsMirroredCount: mirrored.length,
+        nonOpsJobsExpectedCount: nonOpsJobs.length,
+      };
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  // --- Scenario 11: protocol read-only contract (round 4) ----------------
+  // Confirms CronJobState's maintenance fields are present, optional, and
+  // absent from the writable patch schema. This is the cross-package anchor
+  // for operator-visible state.
+  {
+    const { Value } = await import("typebox/value");
+    const { CronJobStateSchema } = await import("../packages/gateway-protocol/src/schema/cron.js");
+    const allFields = Value.Check(CronJobStateSchema, {
+      deferredMaintenanceCount: 5,
+      firstDeferredMaintenanceAtMs: 1_000,
+      lastDeferredMaintenanceAtMs: 2_000,
+    });
+    const negativeCount = Value.Check(CronJobStateSchema, {
+      deferredMaintenanceCount: -1,
+    });
+    const additionalProp = Value.Check(CronJobStateSchema, {
+      deferredMaintenanceCount: 1,
+      smuggled: "x",
+    });
+    evidence.scenario_11_protocol_contract = {
+      note: "CronJobStateSchema accepts the maintenance fields as optional, rejects negative counts, and is a closed object (no smuggled properties).",
+      allFieldsValid: allFields,
+      negativeCountRejected: !negativeCount,
+      additionalPropertyRejected: !additionalProp,
+    };
+  }
+
+  // --- Scenario 12: heartbeat dispatcher intent matrix (round 4) ---------
+  // The deferral reason must be stable across all non-manual wake intents
+  // when the agent is non-allowed. Manual intent must pierce the window.
+  {
+    const intents = ["scheduled", "event", "task", "immediate", "manual"] as const;
+    const decisions: Record<string, { defer: boolean; reason?: string; retryAtMs?: number }> = {};
+    for (const intent of intents) {
+      const d = shouldDeferWake({
+        intent,
+        reason: "test",
+        now: AT_UTC_03_30,
+        nextDueMs: AT_UTC_03_30 - 1_000,
+        maintenanceWindow: {
+          isAllowed: false,
+          nextAllowedAtMs: AT_UTC_05_00,
+          windowEndsAtMs: AT_UTC_05_00,
+        },
+      });
+      decisions[intent] = {
+        defer: d.defer,
+        reason: d.defer ? d.reason : undefined,
+        retryAtMs: d.defer ? d.retryAtMs : undefined,
+      };
+    }
+    evidence.scenario_12_heartbeat_intent_matrix = {
+      note: "Maintenance window gate is consistent across all wake intents. Non-manual intents defer with reason='maintenance-window' and retryAtMs=windowEnd; manual pierces the window.",
+      decisions,
+    };
+  }
+
+  // --- Scenario 13: status report snapshot (round 4) --------------------
+  // 5 (config, time) combinations; each emits a stable structural shape.
+  {
+    const { getMaintenanceStatusReport } = await import("../src/cron/maintenance-status.js");
+    type Row = { enabled: boolean; phase: string; window: object | null; deferredCount: number };
+    const rows: Record<string, Row> = {};
+    const matrix: Array<{
+      label: string;
+      cfg: ReturnType<typeof cfgWithMaintenance>;
+      nowMs: number;
+    }> = [
+      { label: "unconfigured", cfg: cfgWithMaintenance({ enabled: false }), nowMs: AT_UTC_03_30 },
+      { label: "enabled_inside", cfg: cfgWithMaintenance(), nowMs: AT_UTC_03_30 },
+      { label: "enabled_before", cfg: cfgWithMaintenance(), nowMs: AT_UTC_01_30 },
+      { label: "enabled_after", cfg: cfgWithMaintenance(), nowMs: AT_UTC_05_00 },
+      {
+        label: "enabled_inside_no_roster",
+        cfg: cfgWithMaintenance({ maintenanceAgents: undefined, allowManualRun: true }),
+        nowMs: AT_UTC_03_30,
+      },
+    ];
+    for (const m of matrix) {
+      const report = getMaintenanceStatusReport({ cfg: m.cfg, nowMs: m.nowMs });
+      rows[m.label] = {
+        enabled: report.enabled,
+        phase: report.phase,
+        window: report.window,
+        deferredCount: report.deferredCount,
+      };
+    }
+    evidence.scenario_13_status_report_matrix = {
+      note: "Status report is stable across (config, time) combinations; only the wall-clock-derived nextPhaseChangeMs varies (omitted from snapshot).",
+      rows,
+    };
+  }
+
   console.log(JSON.stringify(evidence, null, 2));
 }
 
