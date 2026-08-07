@@ -39,7 +39,9 @@ describe("maintenance-deferred queue", () => {
     expect(getMaintenanceDeferralCount()).toBe(1);
     const entry = listMaintenanceDeferrals()[0];
     expect(entry).toBeDefined();
-    if (!entry) return;
+    if (!entry) {
+      return;
+    }
     expect(entry.firstDeferredAtMs).toBe(1_000);
     expect(entry.lastDeferredAtMs).toBe(3_000);
   });
@@ -61,7 +63,9 @@ describe("maintenance-deferred queue", () => {
     recordMaintenanceDeferral({ jobId: "job-A", agentId: "ops", nowMs: 200 });
     const first = listMaintenanceDeferrals()[0];
     expect(first).toBeDefined();
-    if (!first) return;
+    if (!first) {
+      return;
+    }
     expect(first.phaseId).toBe(phase1);
 
     const phase2 = beginMaintenancePhase(500);
