@@ -517,6 +517,86 @@ async function main() {
     };
   }
 
+  // --- Scenario 9: deferred-jobs mirroring to job.state at phase exit ---
+  // The phase-exit reconciliation mirrors the held-backlog into job.state
+  // (deferredMaintenanceCount + first/lastDeferred*) so the protocol-level
+  // diagnostics have a canonical producer. The previous design relied on
+  // applyJobResult to do the mirror, but the phase-exit drain cleared the
+  // queue before the job ran, so the count never incremented. The fix
+  // moves the mirror to phase exit.
+  {
+    resetMaintenanceDeferrals();
+    const ctx = await makeJobState();
+    try {
+      const cfg = cfgWithMaintenance();
+      const state = createCronServiceState({
+        storePath: ctx.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        nowMs: () => AT_UTC_03_30,
+        enqueueSystemEvent: () => undefined,
+        requestHeartbeat: () => undefined,
+        runIsolatedAgentJob: (() => {
+          throw new Error("test: not invoked");
+        }) as never,
+        cronConfig: cfg.cron,
+        userTimezone: cfg.agents.defaults.userTimezone,
+      });
+      // Load the store so reconcileMaintenancePhaseTransition can find the
+      // job in state.store.jobs.
+      const { ensureLoaded } = await import("../src/cron/service/store.js");
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      // Use a modified job whose nextRunAtMs is in the past so the gate
+      // path fires (otherwise isRunnableJob short-circuits to "not due"
+      // and never records a deferral).
+      const dueJob: CronJob = {
+        ...ctx.job,
+        state: {
+          ...ctx.job.state,
+          lastRunAtMs: AT_UTC_03_30,
+          nextRunAtMs: AT_UTC_03_30 - 60_000, // 1 min in the past, due
+        },
+      };
+      // Persist the modified job so the store's deserialized copy has
+      // the same state.
+      const { writeCronStoreSnapshot } = await import("../src/cron/service.test-harness.js");
+      await writeCronStoreSnapshot({
+        storePath: ctx.storePath,
+        jobs: [dueJob],
+      });
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      const storeJob = state.store?.jobs.find((j) => j.id === "job-under-test");
+      if (!storeJob) {
+        throw new Error("test: store job not found");
+      }
+      // Tick inside the window: defer the job.
+      reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+      isRunnableJob({
+        state,
+        job: dueJob,
+        nowMs: AT_UTC_03_30,
+        allowCronMissedRunByLastRun: true,
+      });
+      // Phase exit: the mirror runs and the queue clears.
+      const phaseExit = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+      evidence.scenario_9_deferred_mirroring = {
+        note: "Bug-fix scenario: the phase-exit reconciliation mirrors the held-backlog into job.state (deferredMaintenanceCount + first/lastDeferredMaintenanceAtMs) before clearing the queue. The previous design relied on applyJobResult, but the phase-exit drain cleared the queue first so the count never incremented.",
+        phaseExit: {
+          current: phaseExit.current,
+          drainedCount: phaseExit.drainedCount,
+        },
+        mirroredBeforeJobRuns: {
+          deferredMaintenanceCount: storeJob.state.deferredMaintenanceCount,
+          firstDeferredMaintenanceAtMs: storeJob.state.firstDeferredMaintenanceAtMs,
+          lastDeferredMaintenanceAtMs: storeJob.state.lastDeferredMaintenanceAtMs,
+        },
+        queueIsEmpty: getMaintenanceDeferralCount() === 0,
+      };
+    } finally {
+      await ctx.cleanup();
+    }
+  }
+
   console.log(JSON.stringify(evidence, null, 2));
 }
 

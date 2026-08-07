@@ -526,12 +526,31 @@ export function reconcileMaintenancePhaseTransition(
       beginMaintenancePhase(nowMs);
       phaseBegan = true;
     } else if (previous === "maintenance") {
-      // maintenance -> normal: drain and clear. The actual job admit happens
-      // on the next tick; we just retire the bookkeeping here. We deliberately
-      // do NOT drain on `undefined -> normal`: a stale entry that survived a
-      // service restart is the responsibility of the restart recovery, not
-      // the phase transition.
-      drainedCount = listMaintenanceDeferrals().length;
+      // maintenance -> normal: mirror the held-backlog into job.state for
+      // each job in the store, then clear the queue. The next scheduler
+      // tick re-evaluates the job store and admits any due jobs naturally;
+      // the mirrored counts (deferredMaintenanceCount, first/lastDeferred*)
+      // are the canonical source of the protocol-level maintenance
+      // diagnostics, so the mirror must happen BEFORE the queue clear.
+      // We deliberately do NOT drain on `undefined -> normal`: a stale
+      // entry that survived a service restart is the responsibility of
+      // the restart recovery, not the phase transition.
+      const held = listMaintenanceDeferrals();
+      drainedCount = held.length;
+      if (state.store) {
+        for (const entry of held) {
+          const job = state.store.jobs.find((j) => j.id === entry.jobId);
+          if (!job) {
+            continue;
+          }
+          if (!job.state) {
+            job.state = {};
+          }
+          job.state.deferredMaintenanceCount = (job.state.deferredMaintenanceCount ?? 0) + 1;
+          job.state.firstDeferredMaintenanceAtMs = entry.firstDeferredAtMs;
+          job.state.lastDeferredMaintenanceAtMs = entry.lastDeferredAtMs;
+        }
+      }
       clearMaintenanceDeferrals();
     }
     // undefined -> normal: no-op (no bump, no drain). The first tick just
