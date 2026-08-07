@@ -233,4 +233,30 @@ describe("isRunnableJob maintenance gate (admit-then-record)", () => {
     expect(isRunnableJob({ state, job, nowMs: AT_UTC_05_00 })).toBe(true);
     expect(shouldDeferJobToMaintenance(state, job, AT_UTC_05_00)).toBe(false);
   });
+
+  it("falls back to defaultAgentId when job.agentId is undefined", async () => {
+    // The state declares defaultAgentId='ops' which IS in the maintenance roster.
+    // A job with no agentId should be evaluated against the default, admitted
+    // (no record, no block) during the window.
+    const { storePath } = await makeStorePath();
+    const jobWithoutAgent = makeJob("job-A");
+    delete (jobWithoutAgent as { agentId?: string }).agentId;
+    await writeCronStoreSnapshot({ storePath, jobs: [jobWithoutAgent] });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      defaultAgentId: "ops",
+      userTimezone: "UTC",
+      cronConfig: {
+        maintenance: {
+          enabled: true,
+          window: { start: "02:00", end: "04:00", timezone: "UTC" },
+          maintenanceAgents: ["ops"],
+        },
+      },
+    });
+    expect(isRunnableJob({ state, job: jobWithoutAgent, nowMs: AT_UTC_03_30 })).toBe(true);
+    expect(shouldDeferJobToMaintenance(state, jobWithoutAgent, AT_UTC_03_30)).toBe(false);
+  });
 });
