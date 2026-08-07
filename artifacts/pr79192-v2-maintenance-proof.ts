@@ -447,8 +447,14 @@ async function main() {
   // --- Scenario 8: DST safety of nextPhaseChangeMs (P2) ------------------
   // The old resolver used wall-minute x 60_000 arithmetic, which lands
   // retryAtMs at the wrong wall clock across DST. The new resolver maps
-  // the target zoned instant to a real UTC instant, which is correct
-  // across both spring forward and fall back.
+  // the target zoned instant to a real UTC instant by iterating
+  // formatToParts until convergence. For non-existent times (spring forward)
+  // the loop oscillates; we pick the smallest candidate whose local wall
+  // clock has the target's date and a time >= the target time (the next
+  // valid time). For ambiguous times (fall back) the iteration converges
+  // (localAsUtc === targetAsUtc) and we return that single instant, which
+  // is the pre-DST (first) occurrence — the conventional pick for
+  // "next time HH:MM arrives".
   {
     // Spring forward: 2026-03-08 in America/Los_Angeles, 02:00 LA -> 03:00 PDT.
     // Pre-window: 2026-03-07 23:30 PST == 2026-03-08 07:30 UTC. Next change is
