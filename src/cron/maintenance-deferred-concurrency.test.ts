@@ -108,7 +108,7 @@ describe("deferred queue intra-process concurrency", () => {
       ),
     );
     expect(shifted).toHaveLength(N);
-    const sorted = [...shifted].sort();
+    const sorted = [...shifted].toSorted();
     expect(shifted).toEqual(sorted);
   });
 

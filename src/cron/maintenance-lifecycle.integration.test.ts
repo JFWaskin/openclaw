@@ -146,8 +146,8 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
     let runnable = collectRunnableJobs(state, AT_NORMAL_BEFORE, {
       allowCronMissedRunByLastRun: true,
     });
-    expect(runnable.map((j) => j.id).sort()).toEqual(
-      ["main-1", "main-2", "ops-1", "ops-2", "ops-3", "secondary-1"].sort(),
+    expect(runnable.map((j) => j.id).toSorted()).toEqual(
+      ["main-1", "main-2", "ops-1", "ops-2", "ops-3", "secondary-1"].toSorted(),
     );
     expect(getMaintenanceDeferralCount()).toBe(0);
 
@@ -157,10 +157,10 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
     runnable = collectRunnableJobs(state, AT_MAINT_1, {
       allowCronMissedRunByLastRun: true,
     });
-    expect(runnable.map((j) => j.id).sort()).toEqual(["ops-1", "ops-2", "ops-3"].sort());
+    expect(runnable.map((j) => j.id).toSorted()).toEqual(["ops-1", "ops-2", "ops-3"].toSorted());
     expect(getMaintenanceDeferralCount()).toBe(3);
     const deferredIds = listMaintenanceDeferrals().map((e) => e.jobId);
-    expect(deferredIds.sort()).toEqual(["main-1", "main-2", "secondary-1"].sort());
+    expect(deferredIds.toSorted()).toEqual(["main-1", "main-2", "secondary-1"].toSorted());
 
     // Record the first/last times for the deferred jobs to confirm
     // per-job firstDeferredMaintenanceAtMs / lastDeferredMaintenanceAtMs
@@ -227,9 +227,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
     expect(state.lastMaintenancePhase).toBe("maintenance");
     // Manually record a deferral for the test scenario (simulating that
     // isRunnableJob admitted-then-deferred the main job in window 1).
-    reconcileMaintenancePhaseTransition; // no-op, just for symmetry
     // We must use the public record path because the queue is process-global.
-    // Drive the test by forcing a deferral via the policy helper below.
     const { recordMaintenanceDeferral, beginMaintenancePhase } =
       await import("./maintenance-deferred.js");
     beginMaintenancePhase(AT_MAINT_1);

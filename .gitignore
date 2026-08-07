@@ -228,3 +228,7 @@ extensions/discord/assets/embedded-app-sdk.mjs
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+.pr79192-blueprint/
+
+# Local openclaw-pr79192 blueprint (not part of PR)
+.pr79192-blueprint/
