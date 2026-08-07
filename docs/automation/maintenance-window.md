@@ -146,16 +146,25 @@ These fields are read-only and are cleared when the phase exits.
 
 ## Configuration reload behaviour
 
-`cron.maintenance.*` is read by the cron service at construction time.
-Editing the block and triggering `openclaw config reload` does not push
-the new window or roster into a running cron service instance; the change
-takes effect after the next gateway (re)start. Live hot reload of the
-maintenance block is a v3 follow-up.
+`cron.maintenance.*` is owned by the cron service. The gateway's hot-reload
+planner (see `src/gateway/server-reload-hot.ts`) detects a maintenance-block
+change and rebuilds `cronState` with `buildGatewayCronService({ cfg: nextConfig, ... })`,
+draining the previous service via `stopAndDrain` before publishing the new
+one. **No gateway restart is required**: the gateway runtime stays up while
+the cron service is replaced in place, and the in-memory maintenance phase
+tracking is reset as part of the rebuild.
 
-If you are rolling the maintenance window into production on a long-lived
-gateway, plan a short restart window to pick up the change. The same
-applies to `agents.defaults.userTimezone` changes that affect the default
-fallback for an omitted `window.timezone`.
+The same rebuild path covers changes to `agents.defaults.userTimezone` when
+that field is the implicit fallback for an omitted `window.timezone`.
+
+Live hot reload of the _deferred backlog_ (jobs that were held when the
+window was active) is intentionally not preserved across a cron-service
+rebuild: a `clearMaintenanceDeferrals` runs as part of the new service
+start. This matches the existing project convention that in-memory
+scheduling state is process-local, and is the reason the docs recommend
+using a configuration that does not change frequently in production. If
+you need to roll the window mid-window, prefer editing the block to widen
+or disable the window rather than rewinding it.
 
 ## What changed vs #79192
 
