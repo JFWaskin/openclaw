@@ -233,8 +233,55 @@ function zonedDateTimeToUtcMs(
       const next = targetAsUtc - offsetMs;
       if (visited.has(next)) {
         // Oscillating: the target wall clock is non-existent (spring forward)
-        // or ambiguous (fall back). Return the larger UTC value: the post-DST
-        // instant, which is the conventional "next time HH:MM arrives".
+        // or ambiguous (fall back). The naive guess (`targetAsUtc`) and the
+        // iteration candidates may land on different *dates* in the target
+        // timezone, so a pure max-in-UTC comparison can pick the wrong
+        // instant when the naive guess crosses a day boundary in a positive
+        // UTC-offset timezone (e.g. southern-hemisphere spring forward:
+        // naive 02:00 UTC == 13:00 AEDT the NEXT day, well past the window).
+        //
+        // For a non-existent time, the "next valid" candidate is the one whose
+        // local wall clock has the target's *date* and a time >= the target
+        // time. We pick the smallest such candidate; the targetAsUtc itself
+        // is excluded if its formatted date does not match.
+        const totalTargetMin = hour * 60 + minute;
+        let best: number | null = null;
+        for (const candidateMs of visited) {
+          const cParts = new Intl.DateTimeFormat("en-US", {
+            timeZone: timezone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hourCycle: "h23",
+          }).formatToParts(new Date(candidateMs));
+          const cMap: Record<string, string> = {};
+          for (const p of cParts) {
+            if (p.type !== "literal") {
+              cMap[p.type] = p.value;
+            }
+          }
+          if (
+            Number(cMap.year) !== year ||
+            Number(cMap.month) !== month ||
+            Number(cMap.day) !== day
+          ) {
+            continue;
+          }
+          const cTotal = Number(cMap.hour) * 60 + Number(cMap.minute);
+          if (cTotal < totalTargetMin) {
+            continue;
+          }
+          if (best === null || candidateMs < best) {
+            best = candidateMs;
+          }
+        }
+        if (best !== null) {
+          return best;
+        }
+        // Fallback for the ambiguous-but-not-non-existent case: pick the
+        // largest UTC value, which is the pre-DST (first) occurrence.
         let max = targetAsUtc;
         for (const v of visited) {
           if (v > max) {
