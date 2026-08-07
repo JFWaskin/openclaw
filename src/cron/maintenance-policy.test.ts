@@ -375,3 +375,139 @@ describe("resolveMaintenancePhaseForCron", () => {
     expect(result.allowed).toBe(false); // empty roster blocks everyone
   });
 });
+
+describe("DST safety of nextPhaseChangeMs", () => {
+  // Reference instants used in DST tests. Verified against IANA tzdata 2026a.
+  //
+  // America/Los_Angeles, 2026 spring forward (March 8, 2026, 02:00 PST -> 03:00 PDT):
+  //   2026-03-08 02:00 LA: DOES NOT EXIST (the clock jumps 02:00 -> 03:00)
+  //   2026-03-08 03:00 LA == 2026-03-08 10:00 UTC (the first 03:00, PDT, UTC-7)
+  //   2026-03-08 04:00 LA == 2026-03-08 11:00 UTC (PDT, UTC-7)
+  //
+  // America/Los_Angeles, 2026 fall back (November 1, 2026, 02:00 PDT -> 01:00 PST):
+  //   2026-11-01 01:00 LA == 2026-11-01 08:00 UTC (the first 01:00, PDT, UTC-7)
+  //   2026-11-01 01:00 LA == 2026-11-01 09:00 UTC (the second 01:00, PST, UTC-8)
+  //   2026-11-01 03:00 LA == 2026-11-01 11:00 UTC (the only 03:00, PST, UTC-8)
+  //
+  // For the maintenance window, "next time HH:MM arrives" uses the post-DST
+  // wall clock: 02:00 LA on spring-forward day = 03:00 PDT = 10:00 UTC;
+  // 01:00 LA on fall-back day = first 01:00 PDT = 08:00 UTC.
+
+  const LA = "America/Los_Angeles";
+
+  it("returns the post-DST wall clock for a spring-forward start", () => {
+    // 2026-03-08 07:30 UTC == 2026-03-07 23:30 PST, before the window.
+    // Old wall-minute math: 02:00 LA - 23:30 PST = 150 wall minutes ->
+    // 07:30 UTC + 150 min = 10:00 UTC, coincidentally correct.
+    // The real correctness check is that the result lands at 02:00+ LA
+    // (i.e. 03:00 PDT == 10:00 UTC), NOT at 04:00 LA.
+    const nowUtc = Date.UTC(2026, 2, 8, 7, 30, 0);
+    const result = resolveMaintenancePhase({
+      cfg: cfg({
+        enabled: true,
+        start: "02:00",
+        end: "04:00",
+        timezone: LA,
+        maintenanceAgents: ["ops"],
+      }),
+      nowMs: nowUtc,
+      agentId: "ops",
+    });
+    expect(result.phase).toBe("normal");
+    expect(result.nextPhaseChangeMs).toBe(Date.UTC(2026, 2, 8, 10, 0, 0));
+  });
+
+  it("returns the correct end instant inside a spring-forward window", () => {
+    // 2026-03-08 10:30 UTC == 2026-03-08 03:30 PDT, INSIDE [02:00, 04:00).
+    // The window ends at 04:00 LA == 04:00 PDT == 11:00 UTC.
+    const nowUtc = Date.UTC(2026, 2, 8, 10, 30, 0);
+    const result = resolveMaintenancePhase({
+      cfg: cfg({
+        enabled: true,
+        start: "02:00",
+        end: "04:00",
+        timezone: LA,
+        maintenanceAgents: ["ops"],
+      }),
+      nowMs: nowUtc,
+      agentId: "main",
+    });
+    expect(result.phase).toBe("maintenance");
+    expect(result.allowed).toBe(false);
+    expect(result.nextPhaseChangeMs).toBe(Date.UTC(2026, 2, 8, 11, 0, 0));
+  });
+
+  it("returns the first occurrence for a fall-back start", () => {
+    // 2026-11-01 06:30 UTC == 2026-10-31 23:30 PDT, before the window.
+    // Window starts at 01:00 LA; the first occurrence is 01:00 PDT == 08:00 UTC.
+    const nowUtc = Date.UTC(2026, 10, 1, 6, 30, 0);
+    const result = resolveMaintenancePhase({
+      cfg: cfg({
+        enabled: true,
+        start: "01:00",
+        end: "03:00",
+        timezone: LA,
+        maintenanceAgents: ["ops"],
+      }),
+      nowMs: nowUtc,
+      agentId: "ops",
+    });
+    expect(result.phase).toBe("normal");
+    expect(result.nextPhaseChangeMs).toBe(Date.UTC(2026, 10, 1, 8, 0, 0));
+  });
+
+  it("returns the correct end instant across a fall-back boundary", () => {
+    // 2026-11-01 09:30 UTC == 2026-11-01 01:30 PST (post-fall-back, second 01:00).
+    // Window is in effect; ends at 03:00 LA == 03:00 PST == 11:00 UTC.
+    const nowUtc = Date.UTC(2026, 10, 1, 9, 30, 0);
+    const result = resolveMaintenancePhase({
+      cfg: cfg({
+        enabled: true,
+        start: "01:00",
+        end: "03:00",
+        timezone: LA,
+        maintenanceAgents: ["ops"],
+      }),
+      nowMs: nowUtc,
+      agentId: "main",
+    });
+    expect(result.phase).toBe("maintenance");
+    expect(result.allowed).toBe(false);
+    expect(result.nextPhaseChangeMs).toBe(Date.UTC(2026, 10, 1, 11, 0, 0));
+  });
+
+  it("UTC timezone is unaffected by DST (sanity check)", () => {
+    const result = resolveMaintenancePhase({
+      cfg: cfg({
+        enabled: true,
+        start: "02:00",
+        end: "04:00",
+        timezone: "UTC",
+        maintenanceAgents: ["ops"],
+      }),
+      nowMs: AT_UTC_03_30,
+      agentId: "main",
+    });
+    expect(result.phase).toBe("maintenance");
+    expect(result.nextPhaseChangeMs).toBe(Date.UTC(2026, 0, 15, 4, 0, 0));
+  });
+
+  it("rolls to the next day when today's target is already past (DST-safe)", () => {
+    // 2026-03-08 11:30 UTC == 2026-03-08 04:30 PDT, AFTER the window.
+    // Next change should be tomorrow's 02:00 LA == 02:00 PDT == 09:00 UTC.
+    const nowUtc = Date.UTC(2026, 2, 8, 11, 30, 0);
+    const result = resolveMaintenancePhase({
+      cfg: cfg({
+        enabled: true,
+        start: "02:00",
+        end: "04:00",
+        timezone: LA,
+        maintenanceAgents: ["ops"],
+      }),
+      nowMs: nowUtc,
+      agentId: "ops",
+    });
+    expect(result.phase).toBe("normal");
+    expect(result.nextPhaseChangeMs).toBe(Date.UTC(2026, 2, 9, 9, 0, 0));
+  });
+});

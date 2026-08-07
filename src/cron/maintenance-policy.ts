@@ -142,17 +142,157 @@ function buildMinutesFormatter(timezone: string): Intl.DateTimeFormat | null {
 }
 
 /**
- * Compute the next wall-clock instant at which the minute-of-day in `timezone`
- * reaches the supplied `targetMin`. `nowMin` is the current minute-of-day in
- * the same timezone. Used to give callers a `nextPhaseChangeMs` they can route
- * into `shouldDeferWake` as `retryAtMs`.
+ * Resolve the (year, month, day) of `nowMs` in the supplied IANA timezone, or
+ * `null` if the formatter cannot answer (invalid timezone, etc.). The result is
+ * the wall-clock calendar day, not the UTC date.
  */
-function computeNextChangeMs(nowMs: number, nowMin: number, targetMin: number): number {
-  let deltaMin = targetMin - nowMin;
-  if (deltaMin <= 0) {
-    deltaMin += 24 * 60; // wrap to next day
+function resolveDateInTimezone(
+  nowMs: number,
+  timezone: string,
+): { year: number; month: number; day: number } | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(nowMs));
+    const map: Record<string, string> = {};
+    for (const part of parts) {
+      if (part.type !== "literal") {
+        map[part.type] = part.value;
+      }
+    }
+    const year = Number(map.year);
+    const month = Number(map.month);
+    const day = Number(map.day);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+      return null;
+    }
+    return { year, month, day };
+  } catch {
+    return null;
   }
-  return nowMs + deltaMin * 60_000;
+}
+
+/**
+ * Convert a (year, month, day, hour, minute) tuple interpreted as a wall-clock
+ * instant in the supplied IANA `timezone` to the equivalent epoch ms. Returns
+ * `null` on formatter failure.
+ *
+ * DST handling: the offset depends on the resolved UTC instant, so the resolver
+ * iterates from a naive-UTC guess until the formatted local wall clock matches
+ * the target. For non-existent times (spring-forward gap) the loop oscillates
+ * between the pre- and post-transition UTC values; we then return the larger of
+ * the two, which corresponds to the post-DST wall clock (i.e. the first valid
+ * `>= target` instant). For ambiguous times (fall-back overlap) the two values
+ * are the two real occurrences of the wall clock; the larger is the
+ * post-transition (= first occurrence, before the clock is wound back) one,
+ * which is the conventional pick for "next time HH:MM arrives".
+ */
+function zonedDateTimeToUtcMs(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timezone: string,
+): number | null {
+  try {
+    const targetAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+    const visited = new Set<number>([targetAsUtc]);
+    let candidate = targetAsUtc;
+    for (let i = 0; i < 4; i++) {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(new Date(candidate));
+      const map: Record<string, string> = {};
+      for (const part of parts) {
+        if (part.type !== "literal") {
+          map[part.type] = part.value;
+        }
+      }
+      const localAsUtc = Date.UTC(
+        Number(map.year),
+        Number(map.month) - 1,
+        Number(map.day),
+        Number(map.hour),
+        Number(map.minute),
+      );
+      // Convergence: the local wall clock at `candidate` matches the target.
+      if (localAsUtc === targetAsUtc) {
+        return candidate;
+      }
+      const offsetMs = localAsUtc - candidate;
+      const next = targetAsUtc - offsetMs;
+      if (visited.has(next)) {
+        // Oscillating: the target wall clock is non-existent (spring forward)
+        // or ambiguous (fall back). Return the larger UTC value: the post-DST
+        // instant, which is the conventional "next time HH:MM arrives".
+        let max = targetAsUtc;
+        for (const v of visited) {
+          if (v > max) max = v;
+        }
+        return max;
+      }
+      visited.add(next);
+      candidate = next;
+    }
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compute the next epoch ms at which the wall-clock in `timezone` reaches
+ * `targetMin` minutes-of-day. If today's target has already passed, returns
+ * tomorrow's target. Falls back to "24h from now" on any formatter failure so
+ * the caller never blocks forever on a bad config.
+ *
+ * DST-safe: this does NOT use wall-minute × 60_000 arithmetic, which can be
+ * off by an hour when the wall clock skips forward or back. The instant is
+ * always resolved as a real zoned boundary and then mapped to UTC.
+ */
+function computeNextChangeMs(nowMs: number, targetMin: number, timezone: string): number {
+  const safeFallback = nowMs + 24 * 60 * 60 * 1000;
+  const date = resolveDateInTimezone(nowMs, timezone);
+  if (!date) {
+    return safeFallback;
+  }
+  const targetHour = Math.floor(targetMin / 60);
+  const targetMinute = targetMin % 60;
+  let target = zonedDateTimeToUtcMs(
+    date.year,
+    date.month,
+    date.day,
+    targetHour,
+    targetMinute,
+    timezone,
+  );
+  if (target === null || target <= nowMs) {
+    // Roll to tomorrow. UTC arithmetic on the calendar date is safe because
+    // we are advancing the day, not computing a clock face minute.
+    const tomorrow = new Date(Date.UTC(date.year, date.month - 1, date.day + 1));
+    target = zonedDateTimeToUtcMs(
+      tomorrow.getUTCFullYear(),
+      tomorrow.getUTCMonth() + 1,
+      tomorrow.getUTCDate(),
+      targetHour,
+      targetMinute,
+      timezone,
+    );
+    if (target === null) {
+      return safeFallback;
+    }
+  }
+  return target;
 }
 
 /**
@@ -204,7 +344,7 @@ export function resolveMaintenancePhase(params: {
     return {
       phase: "normal",
       allowed: true,
-      nextPhaseChangeMs: computeNextChangeMs(params.nowMs, nowMin, startMin),
+      nextPhaseChangeMs: computeNextChangeMs(params.nowMs, startMin, timezone),
     };
   }
 
@@ -215,7 +355,7 @@ export function resolveMaintenancePhase(params: {
   return {
     phase: "maintenance",
     allowed,
-    nextPhaseChangeMs: computeNextChangeMs(params.nowMs, nowMin, endMin),
+    nextPhaseChangeMs: computeNextChangeMs(params.nowMs, endMin, timezone),
     reason: allowed ? "maintenance.role-allowed" : "maintenance.role-blocked",
   };
 }
