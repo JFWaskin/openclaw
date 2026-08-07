@@ -31,12 +31,13 @@ import {
   resolveMaintenancePhase,
   isManualRunAllowed,
   resolveMaintenancePhaseForCron,
+  reconcileMaintenancePhaseTransition,
 } from "../src/cron/maintenance-policy.js";
 import { writeCronStoreSnapshot } from "../src/cron/service.test-harness.js";
 import { status as cronStatus } from "../src/cron/service/ops-read.js";
 import { createCronServiceState } from "../src/cron/service/state.js";
 import { applyJobResult } from "../src/cron/service/timer-outcomes.js";
-import { isRunnableJob } from "../src/cron/service/timer-runnable.js";
+import { isRunnableJob, shouldDeferJobToMaintenance } from "../src/cron/service/timer-runnable.js";
 import type { CronJob } from "../src/cron/types.js";
 import { shouldDeferWake } from "../src/infra/heartbeat-cooldown.js";
 
@@ -303,6 +304,210 @@ async function main() {
       role_allowed_agent: { allowed: roleAllowed },
       replay_order: drained,
       pre_window_phase: preWindowPhase.phase,
+    };
+  }
+
+  // --- Scenario 6: isRunnableJob admit-then-record (P1) ------------------
+  // With the gate at the head of isRunnableJob, every probe during the
+  // window recorded a deferral — including jobs that would not have run
+  // anyway. The new gate runs at the END of admission; a not-due job
+  // returns false WITHOUT recording a deferral.
+  {
+    resetMaintenanceDeferrals();
+    const ctx = await makeJobState();
+    try {
+      const cfg = cfgWithMaintenance();
+      const state = createCronServiceState({
+        storePath: ctx.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        nowMs: () => AT_UTC_03_30,
+        enqueueSystemEvent: () => undefined,
+        requestHeartbeat: () => undefined,
+        runIsolatedAgentJob: (() => {
+          throw new Error("test: not invoked");
+        }) as never,
+        cronConfig: cfg.cron,
+        userTimezone: cfg.agents.defaults.userTimezone,
+      });
+      // Positive case: a job whose nextRunAtMs is in the past and
+      // allowCronMissedRunByLastRun is true. The job is "due by catch-up",
+      // the agent is not in the roster, so the gate records a deferral and
+      // returns false.
+      const dueJob: CronJob = {
+        ...ctx.job,
+        state: {
+          ...ctx.job.state,
+          nextRunAtMs: AT_UTC_01_30, // 2h before nowMs, definitely due
+        },
+      };
+      const dueResult = isRunnableJob({
+        state,
+        job: dueJob,
+        nowMs: AT_UTC_03_30,
+        allowCronMissedRunByLastRun: true,
+      });
+      const dueDeferralCount = getMaintenanceDeferralCount();
+
+      // Negative case: same job, but the last run is at the most recent
+      // schedule slot AND nextRunAtMs is in the future. The scheduler
+      // reaches neither the due path nor the missed-run path; the gate
+      // MUST NOT record.
+      resetMaintenanceDeferrals();
+      const notDueJob: CronJob = {
+        ...ctx.job,
+        state: {
+          ...ctx.job.state,
+          lastRunAtMs: AT_UTC_03_30, // last slot aligned with schedule
+          nextRunAtMs: AT_UTC_03_30 + 60_000, // next due 1 minute from now
+        },
+      };
+      const notDueResult = isRunnableJob({
+        state,
+        job: notDueJob,
+        nowMs: AT_UTC_03_30,
+        allowCronMissedRunByLastRun: true,
+      });
+      const notDueDeferralCount = getMaintenanceDeferralCount();
+      evidence.scenario_6_isrunnablejob_admit_then_record = {
+        note: "Bug 1 fix: the maintenance gate runs at the END of admission, so jobs that would have been skipped for unrelated reasons (not due, in backoff, in skipJobIds, active run, terminal one-shot) are NOT recorded as maintenance-deferred. Only jobs that would have actually run are recorded.",
+        due_blocked: { runnable: dueResult, wasDeferralRecorded: dueDeferralCount === 1 },
+        not_due_unrecorded: {
+          runnable: notDueResult,
+          wasDeferralRecorded: notDueDeferralCount > 0,
+        },
+      };
+    } finally {
+      await ctx.cleanup();
+    }
+  }
+
+  // --- Scenario 7: scheduler-owned phase transition (P1) ------------------
+  // The cron tick now owns the deferred-queue phase id (bumped on window
+  // entry) and the backlog drain (on window exit). This scenario exercises
+  // the transition helper end-to-end and confirms the queue actions fire
+  // exactly on transition.
+  {
+    resetMaintenanceDeferrals();
+    const ctx = await makeJobState();
+    try {
+      const cfg = cfgWithMaintenance();
+      const state = createCronServiceState({
+        storePath: ctx.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        nowMs: () => AT_UTC_03_30,
+        enqueueSystemEvent: () => undefined,
+        requestHeartbeat: () => undefined,
+        runIsolatedAgentJob: (() => {
+          throw new Error("test: not invoked");
+        }) as never,
+        cronConfig: cfg.cron,
+        userTimezone: cfg.agents.defaults.userTimezone,
+      });
+      // Tick 1: outside the window. Phase=normal. No bump, no drain.
+      const t1 = reconcileMaintenancePhaseTransition(state, AT_UTC_01_30);
+      // Tick 2: inside the window. Phase=maintenance. Bumps phase id.
+      const t2 = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+      // Defer a couple of jobs while in maintenance.
+      recordMaintenanceDeferral({ jobId: "job-A", agentId: "main", nowMs: AT_UTC_03_30 });
+      recordMaintenanceDeferral({ jobId: "job-B", agentId: "main", nowMs: AT_UTC_03_30 + 1_000 });
+      // Tick 3: outside the window. Phase=normal again. Drains the backlog.
+      const t3 = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+      evidence.scenario_7_phase_transition = {
+        note: "Bug 2 fix: reconcileMaintenancePhaseTransition is the scheduler-owned owner of the phase id and the backlog drain. Three ticks demonstrate (1) no-op outside the window, (2) phase-bump on window entry, (3) backlog drain on window exit.",
+        tick1_outside_window: {
+          previous: t1.previous,
+          current: t1.current,
+          phaseBegan: t1.phaseBegan,
+          drainedCount: t1.drainedCount,
+        },
+        tick2_inside_window: {
+          previous: t2.previous,
+          current: t2.current,
+          phaseBegan: t2.phaseBegan,
+          drainedCount: t2.drainedCount,
+        },
+        tick3_after_window: {
+          previous: t3.previous,
+          current: t3.current,
+          phaseBegan: t3.phaseBegan,
+          drainedCount: t3.drainedCount,
+        },
+        state_after: {
+          lastMaintenancePhase: state.lastMaintenancePhase,
+          queueSize: getMaintenanceDeferralCount(),
+        },
+      };
+    } finally {
+      await ctx.cleanup();
+    }
+  }
+
+  // --- Scenario 8: DST safety of nextPhaseChangeMs (P2) ------------------
+  // The old resolver used wall-minute x 60_000 arithmetic, which lands
+  // retryAtMs at the wrong wall clock across DST. The new resolver maps
+  // the target zoned instant to a real UTC instant, which is correct
+  // across both spring forward and fall back.
+  {
+    // Spring forward: 2026-03-08 in America/Los_Angeles, 02:00 LA -> 03:00 PDT.
+    // Pre-window: 2026-03-07 23:30 PST == 2026-03-08 07:30 UTC. Next change is
+    // the post-DST 02:00 LA = 10:00 UTC (NOT 11:00 UTC which is 04:00 PDT).
+    const preSpringForward = Date.UTC(2026, 2, 8, 7, 30, 0);
+    const springForwardCfg = {
+      agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+      cron: {
+        maintenance: {
+          enabled: true,
+          window: { start: "02:00", end: "04:00", timezone: "America/Los_Angeles" },
+          maintenanceAgents: ["ops"],
+        },
+      },
+    };
+    const springForwardResult = resolveMaintenancePhase({
+      cfg: springForwardCfg as never,
+      nowMs: preSpringForward,
+      agentId: "ops",
+    });
+    const springForwardExpected = Date.UTC(2026, 2, 8, 10, 0, 0);
+
+    // Fall back: 2026-11-01 in America/Los_Angeles, 02:00 PDT -> 01:00 PST.
+    // Pre-window: 2026-10-31 23:30 PDT == 2026-11-01 06:30 UTC. Next change
+    // is the first 01:00 LA (PDT) = 08:00 UTC.
+    const preFallBack = Date.UTC(2026, 10, 1, 6, 30, 0);
+    const fallBackCfg = {
+      agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+      cron: {
+        maintenance: {
+          enabled: true,
+          window: { start: "01:00", end: "03:00", timezone: "America/Los_Angeles" },
+          maintenanceAgents: ["ops"],
+        },
+      },
+    };
+    const fallBackResult = resolveMaintenancePhase({
+      cfg: fallBackCfg as never,
+      nowMs: preFallBack,
+      agentId: "ops",
+    });
+    const fallBackExpected = Date.UTC(2026, 10, 1, 8, 0, 0);
+
+    evidence.scenario_8_dst_safety = {
+      note: "Bug 3 fix: the resolver maps the target zoned instant to a real UTC instant by iterating formatToParts until convergence. For non-existent times (spring forward) the loop oscillates; we return the larger UTC value (post-DST). For ambiguous times (fall back) we return the first occurrence.",
+      spring_forward_pre_window: {
+        nowUtc: preSpringForward,
+        nowMin_la: 23 * 60 + 30, // 23:30 PST
+        nextChangeMs: springForwardResult.nextPhaseChangeMs,
+        expectedMs: springForwardExpected,
+        matches: springForwardResult.nextPhaseChangeMs === springForwardExpected,
+      },
+      fall_back_pre_window: {
+        nowUtc: preFallBack,
+        nowMin_la: 23 * 60 + 30, // 23:30 PDT
+        nextChangeMs: fallBackResult.nextPhaseChangeMs,
+        expectedMs: fallBackExpected,
+        matches: fallBackResult.nextPhaseChangeMs === fallBackExpected,
+      },
     };
   }
 
