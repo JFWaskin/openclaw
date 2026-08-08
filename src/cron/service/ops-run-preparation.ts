@@ -255,6 +255,16 @@ async function inspectManualRunPreflight(
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
+    // Order matters: a manual `mode: "due"` request is only relevant when
+    // the job would have actually run on its own. We check due-eligibility
+    // FIRST so a not-yet-due job short-circuits with `not-due` instead of
+    // recording a maintenance deferral for work that would not have run
+    // anyway. The maintenance gate is post-admission for the same reason
+    // the timer-scheduler gate is: only defer work that *would* have run.
+    const due = isJobDue(job, now, { forced: mode === "force" });
+    if (!due) {
+      return { ok: true, ran: false, reason: "not-due" } as const;
+    }
     // Maintenance gate (manual). When the window is active and this agent is
     // not allowed, record the deferral and reject with `maintenance-blocked`.
     // `mode === "force"` is the operator-initiated bypass; the upstream
@@ -277,10 +287,6 @@ async function inspectManualRunPreflight(
           return { ok: true, ran: false, reason: "maintenance-blocked" } as const;
         }
       }
-    }
-    const due = isJobDue(job, now, { forced: mode === "force" });
-    if (!due) {
-      return { ok: true, ran: false, reason: "not-due" } as const;
     }
     return { ok: true, runnable: true, job, now } as const;
   });

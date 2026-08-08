@@ -24,7 +24,15 @@ function makeJob(id: string, agentId: string): CronJob {
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "hi", toolsAllow: ["write"] },
     agentId,
-    state: { lastRunAtMs: 0, lastStatus: "ok", lastDurationMs: 0, consecutiveErrors: 0 },
+    state: {
+      lastRunAtMs: 0,
+      lastStatus: "ok",
+      lastDurationMs: 0,
+      consecutiveErrors: 0,
+      // nextRunAtMs must be set so isJobDue returns true; the maintenance
+      // gate is post-admission and only fires for work that would have run.
+      nextRunAtMs: AT_UTC_03_30 - 1_000,
+    },
     createdAtMs: 0,
     updatedAtMs: 0,
   };
@@ -181,5 +189,42 @@ describe("inspectManualRunPreflight maintenance gate", () => {
     if (result.ok && "runnable" in result) {
       expect(result.runnable).toBe(true);
     }
+  });
+
+  it("returns not-due (not maintenance-blocked) for a not-yet-due job inside the window", async () => {
+    // Regression for ClawSweeper cycle 4 [P2] "Check manual due
+    // eligibility before recording a deferral". A `mode: "due"` request
+    // for a future-dated job must short-circuit on isJobDue BEFORE
+    // recording a maintenance deferral, so the backlog only contains
+    // work that would have actually run.
+    const { state } = await makeState({
+      maintenance: {
+        enabled: true,
+        window: { start: "02:00", end: "04:00", timezone: "UTC" },
+        maintenanceAgents: ["ops"], // main is NOT in roster
+      },
+      userTimezone: "UTC",
+      job: {
+        ...makeJob("job-A", "main"),
+        state: {
+          lastRunAtMs: 0,
+          lastStatus: "ok",
+          lastDurationMs: 0,
+          consecutiveErrors: 0,
+          // nextRunAtMs is 1 hour in the future, so isJobDue returns false.
+          nextRunAtMs: AT_UTC_03_30 + 60 * 60_000,
+        },
+      },
+    });
+    const result = await inspectManualRunDisposition(state, "job-A", "due");
+    expect(result.ok).toBe(true);
+    if (result.ok && "reason" in result) {
+      expect(result.reason).toBe("not-due");
+    }
+    // And — critically — no deferral was recorded, so the backlog is
+    // empty. The previous design recorded a deferral even for not-yet-due
+    // jobs, polluting the diagnostics.
+    const { getMaintenanceDeferralCount } = await import("../maintenance-deferred.js");
+    expect(getMaintenanceDeferralCount()).toBe(0);
   });
 });
