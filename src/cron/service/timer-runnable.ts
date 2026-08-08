@@ -202,7 +202,7 @@ export function collectRunnableJobs(
   if (!state.store) {
     return [];
   }
-  return state.store.jobs.filter((job) =>
+  const admitted = state.store.jobs.filter((job) =>
     isRunnableJob({
       state,
       job,
@@ -212,4 +212,30 @@ export function collectRunnableJobs(
       allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
     }),
   );
+  // FIFO replay ordering: jobs deferred by the maintenance window have
+  // `lastDeferredMaintenanceAtMs` set by the phase-exit mirror. The replay
+  // MUST preserve the deferral order so the contract advertised in the
+  // operator docs is honoured. Jobs without a deferral timestamp sort
+  // last (their natural nextRunAtMs ordering is preserved by the
+  // scheduler's due-check, but for the in-this-tick set we use
+  // `nextRunAtMs` ascending as the secondary key).
+  if (admitted.some((job) => typeof job.state?.lastDeferredMaintenanceAtMs === "number")) {
+    return [...admitted].toSorted((a, b) => {
+      const aDef = a.state?.lastDeferredMaintenanceAtMs;
+      const bDef = b.state?.lastDeferredMaintenanceAtMs;
+      const aHas = typeof aDef === "number";
+      const bHas = typeof bDef === "number";
+      if (aHas && bHas) {
+        return (aDef as number) - (bDef as number);
+      }
+      if (aHas) {
+        return -1;
+      }
+      if (bHas) {
+        return 1;
+      }
+      return (a.state?.nextRunAtMs ?? 0) - (b.state?.nextRunAtMs ?? 0);
+    });
+  }
+  return admitted;
 }

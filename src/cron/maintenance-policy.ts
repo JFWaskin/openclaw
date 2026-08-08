@@ -526,15 +526,28 @@ export function reconcileMaintenancePhaseTransition(
       beginMaintenancePhase(nowMs);
       phaseBegan = true;
     } else if (previous === "maintenance") {
-      // maintenance -> normal: mirror the held-backlog into job.state for
-      // each job in the store, then clear the queue. The next scheduler
-      // tick re-evaluates the job store and admits any due jobs naturally;
-      // the mirrored counts (deferredMaintenanceCount, first/lastDeferred*)
-      // are the canonical source of the protocol-level maintenance
-      // diagnostics, so the mirror must happen BEFORE the queue clear.
-      // We deliberately do NOT drain on `undefined -> normal`: a stale
-      // entry that survived a service restart is the responsibility of
-      // the restart recovery, not the phase transition.
+      // maintenance -> normal: replay the held-backlog in FIFO order.
+      //
+      // For each held entry we:
+      //   1. Mirror the maintenance diagnostics (deferredMaintenanceCount
+      //      and the first/lastDeferred timestamps) into job.state. The
+      //      mirror is the canonical producer — applyJobResult does NOT
+      //      re-mirror the queue, so a job that runs on the exit tick is
+      //      counted exactly once.
+      //   2. Reset `nextRunAtMs` to `Math.max(entry.lastDeferredAtMs, nowMs - 1)`
+      //      so the next scheduler tick admits the job through the normal
+      //      admission path. The `lastDeferredAtMs` anchor preserves FIFO
+      //      order across the replay (jobs deferred earlier are admitted
+      //      earlier; jobs deferred later have a strictly greater anchor).
+      //   3. `collectRunnableJobs` sorts by `lastDeferredMaintenanceAtMs`
+      //      ascending so the FIFO replay order is enforced even when the
+      //      store's natural order would differ.
+      //
+      // The mirror MUST happen BEFORE the queue clear so the per-job
+      // fields reflect the work that was held. We deliberately do NOT
+      // drain on `undefined -> normal`: a stale entry that survived a
+      // service restart is the responsibility of the restart recovery,
+      // not the phase transition.
       const held = listMaintenanceDeferrals();
       drainedCount = held.length;
       if (state.store) {
@@ -549,6 +562,14 @@ export function reconcileMaintenancePhaseTransition(
           job.state.deferredMaintenanceCount = (job.state.deferredMaintenanceCount ?? 0) + 1;
           job.state.firstDeferredMaintenanceAtMs = entry.firstDeferredAtMs;
           job.state.lastDeferredMaintenanceAtMs = entry.lastDeferredAtMs;
+          // Replay anchor: ensure the job is due so the next scheduler
+          // tick admits it through the normal admission path. We use
+          // `lastDeferredAtMs` as the floor (not `firstDeferredAtMs`) so
+          // the natural admission sort is stable across the replay.
+          const replayAnchor = Math.max(entry.lastDeferredAtMs, nowMs - 1);
+          if (typeof job.state.nextRunAtMs !== "number" || job.state.nextRunAtMs > replayAnchor) {
+            job.state.nextRunAtMs = replayAnchor;
+          }
         }
       }
       clearMaintenanceDeferrals();
