@@ -1,15 +1,16 @@
-// Regression: the deferred-queue-to-job.state mirroring in applyJobResult
-// is supposed to set deferredMaintenanceCount when a deferred job eventually
-// runs. The phase-exit drain in reconcileMaintenancePhaseTransition clears
-// the queue, so applyJobResult's `listMaintenanceDeferrals().find(...)` lookup
-// never matches the job that was deferred. The count would stay at 0.
+// Regression: the deferred-queue-to-job.state mirror has exactly one owner
+// — `reconcileMaintenancePhaseTransition` at the scheduler's finally block.
+// `applyJobResult` deliberately does NOT project the queue; if it did, a
+// job that runs on the phase-exit tick would be double-counted (once at
+// applyJobResult, once at the reconcile that runs immediately after).
 //
 // This test exercises the full lifecycle:
 //   1. Maintenance active; isRunnableJob records a deferral for job A.
-//   2. Phase exits; reconcileMaintenancePhaseTransition drains the queue.
+//   2. Phase exits; reconcileMaintenancePhaseTransition drains the queue
+//      and writes the mirror to job.state. The count is set ONCE.
 //   3. Next tick; isRunnableJob admits job A (we are now in normal phase).
-//   4. applyJobResult runs; the mirroring should set
-//      job.state.deferredMaintenanceCount to at least 1.
+//   4. applyJobResult runs. It must NOT touch deferredMaintenanceCount;
+//      the phase-exit mirror is the canonical producer.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetMaintenanceDeferrals } from "./maintenance-deferred.js";
 import { reconcileMaintenancePhaseTransition } from "./maintenance-policy.js";
@@ -66,8 +67,6 @@ async function makeState(job: CronJob) {
       },
     },
   });
-  // Load the job store from disk so reconcileMaintenancePhaseTransition
-  // can find the job in state.store.jobs.
   await ensureLoaded(state, { forceReload: true, skipRecompute: true });
   return state;
 }
@@ -79,8 +78,8 @@ afterEach(() => {
   resetMaintenanceDeferrals();
 });
 
-describe("applyJobResult mirrors maintenance deferral to job.state", () => {
-  it("sets deferredMaintenanceCount when a deferred job eventually runs", async () => {
+describe("maintenance deferral mirror has a single owner (reconcile, not applyJobResult)", () => {
+  it("phase-exit reconcile writes the mirror; applyJobResult does not double-count", async () => {
     const job = makeJob("job-A");
     const state = await makeState(job);
 
@@ -94,18 +93,18 @@ describe("applyJobResult mirrors maintenance deferral to job.state", () => {
       allowCronMissedRunByLastRun: true,
     });
     expect(blocked).toBe(false);
-    // The store deserializes the job into a new object; reference the
-    // store's copy to inspect the mirrored state.
     const storeJob = state.store?.jobs.find((j) => j.id === "job-A");
+    // Pre-phase-exit: mirror has not happened yet.
     expect(storeJob?.state.deferredMaintenanceCount ?? 0).toBe(0);
 
-    // Phase exits; the next reconciliation mirrors the backlog into
-    // job.state and clears the queue.
+    // Phase exits; reconcile mirrors the backlog and clears the queue.
     const phaseExit = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
     expect(phaseExit.current).toBe("normal");
     expect(phaseExit.drainedCount).toBe(1);
-    // The mirror is now in effect: the count is set before applyJobResult.
-    expect(storeJob?.state.deferredMaintenanceCount ?? 0).toBeGreaterThan(0);
+    // After reconcile: mirror is set EXACTLY ONCE.
+    expect(storeJob?.state.deferredMaintenanceCount).toBe(1);
+    expect(storeJob?.state.firstDeferredMaintenanceAtMs).toBe(AT_UTC_03_30);
+    expect(storeJob?.state.lastDeferredMaintenanceAtMs).toBe(AT_UTC_03_30);
 
     // Tick 2: outside the window. Job A is now admissible.
     const admitted = isRunnableJob({
@@ -116,16 +115,57 @@ describe("applyJobResult mirrors maintenance deferral to job.state", () => {
     });
     expect(admitted).toBe(true);
 
-    // applyJobResult is called when the run completes. The queue is
-    // already drained (the mirror happened at phase exit), so the
-    // applyJobResult lookup misses and does not double-count. The
-    // count from the phase-exit mirror persists.
+    // applyJobResult runs. It must NOT increment the maintenance count
+    // (the mirror at phase exit is the canonical producer).
     applyJobResult(
       state,
       job,
       { status: "ok", startedAt: AT_UTC_05_00, endedAt: AT_UTC_05_00 + 100 },
       { scheduleMode: "advance" },
     );
-    expect(storeJob?.state.deferredMaintenanceCount ?? 0).toBeGreaterThan(0);
+    expect(storeJob?.state.deferredMaintenanceCount).toBe(1); // unchanged
+  });
+
+  it("a job that runs on the exit tick is counted exactly once (not zero, not twice)", async () => {
+    // Simulates the race: the scheduler tick at AT_UTC_05_00 finds job A
+    // (1) already-due (nextRunAtMs is in the past), (2) the phase has
+    // just transitioned from maintenance -> normal. The job runs, then
+    // the finally block runs reconcile. With two mirror owners the
+    // count would be 2. With the single-owner fix it is 1.
+    const job = makeJob("job-A");
+    const state = await makeState(job);
+
+    // Tick 1: inside the window. Deferral recorded.
+    reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    isRunnableJob({
+      state,
+      job,
+      nowMs: AT_UTC_03_30,
+      allowCronMissedRunByLastRun: true,
+    });
+    const storeJob = state.store?.jobs.find((j) => j.id === "job-A");
+    expect(storeJob?.state.deferredMaintenanceCount ?? 0).toBe(0);
+
+    // Tick 2: at the phase boundary, the job is admitted (phase is
+    // already normal because reconcile happened first) and then
+    // applyJobResult runs. Then the test simulates the finally-block
+    // reconcile at the SAME tick — but since lastMaintenancePhase is
+    // already "normal" from the previous tick, the second reconcile is
+    // a no-op (no transition). The count is still 1, not 2.
+    reconcileMaintenancePhaseTransition(state, AT_UTC_05_00); // exit
+    expect(storeJob?.state.deferredMaintenanceCount).toBe(1);
+    isRunnableJob({
+      state,
+      job,
+      nowMs: AT_UTC_05_00,
+      allowCronMissedRunByLastRun: true,
+    });
+    applyJobResult(
+      state,
+      job,
+      { status: "ok", startedAt: AT_UTC_05_00, endedAt: AT_UTC_05_00 + 100 },
+      { scheduleMode: "advance" },
+    );
+    expect(storeJob?.state.deferredMaintenanceCount).toBe(1); // single owner
   });
 });
