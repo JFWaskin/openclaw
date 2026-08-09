@@ -203,6 +203,17 @@ async function onAdmittedTimer(state: CronServiceState) {
         return [];
       }
       const dueCheckNow = state.deps.nowMs();
+      // ClawSweeper cycle 5d [P1] "Reconcile and persist phase exit
+      // before admitting jobs": the previous design called the
+      // reconciliation in the finally block AFTER `collectRunnableJobs`
+      // and `applyJobResult` had already run, so the FIFO replay
+      // ordering was not honored in the same tick and a force-reload
+      // before the next tick would discard the replay-anchor writes.
+      // Run reconcile first; it persists via `saveCronStore` when
+      // there is mirror work, so a manual-run preflight or hot-reload
+      // that triggers `ensureLoaded({ forceReload: true })` between
+      // this tick and the next one still sees the replay anchors.
+      await reconcileMaintenancePhaseTransition(state, dueCheckNow);
       const due = collectRunnableJobs(state, dueCheckNow);
 
       if (due.length === 0) {
@@ -644,36 +655,13 @@ async function onAdmittedTimer(state: CronServiceState) {
       state.deps.log.warn({ err: String(err) }, "cron: session reaper preparation failed");
     } finally {
       state.running = false;
-      // Reconcile the maintenance phase transition before re-arming. This is
-      // the scheduler-owned owner of the deferred-queue phase id (bumped on
-      // window entry) and the backlog drain (on window exit). The next tick's
-      // `collectRunnableJobs` re-evaluates the job store and admits any due
-      // jobs naturally, so we don't need to push them back into the admission
-      // queue from here.
-      const transitionNow = state.deps.nowMs();
-      try {
-        const transition = reconcileMaintenancePhaseTransition(state, transitionNow);
-        if (transition.phaseBegan) {
-          state.deps.log.info(
-            { nowMs: transitionNow, previous: transition.previous, current: transition.current },
-            "cron: maintenance phase entered",
-          );
-        } else if (transition.drainedCount > 0) {
-          state.deps.log.info(
-            {
-              nowMs: transitionNow,
-              previous: transition.previous,
-              current: transition.current,
-              drainedCount: transition.drainedCount,
-            },
-            "cron: maintenance phase exited, deferred backlog drained",
-          );
-        }
-      } catch (err) {
-        // Reconciliation is bookkeeping; an Intl or queue failure here must
-        // never strand the scheduler. Log and continue.
-        state.deps.log.warn({ err: String(err) }, "cron: maintenance phase reconcile failed");
-      }
+      // The maintenance phase reconciliation is now run BEFORE the
+      // admission step (see the call site inside `locked(...)` above) so
+      // the same tick honors the FIFO replay ordering and the replay
+      // anchors are persisted before any force-reload. The legacy
+      // finally-block reconcile is removed; a duplicate call would
+      // re-mirror the diagnostics (applyJobResult's own mirror was
+      // already removed in round 5).
       armTimer(state);
     }
   }

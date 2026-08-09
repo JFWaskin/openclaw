@@ -481,6 +481,7 @@ import {
   listMaintenanceDeferrals,
 } from "./maintenance-deferred.js";
 import type { CronServiceState } from "./service/state.js";
+import { saveCronStore } from "./store.js";
 
 export type MaintenancePhaseTransition = {
   previous: MaintenancePhase | undefined;
@@ -503,10 +504,10 @@ export type MaintenancePhaseTransition = {
  *     and admits any due jobs naturally.
  *   - same -> same: no-op.
  */
-export function reconcileMaintenancePhaseTransition(
+export async function reconcileMaintenancePhaseTransition(
   state: CronServiceState,
   nowMs: number,
-): MaintenancePhaseTransition {
+): Promise<MaintenancePhaseTransition> {
   const decision = resolveMaintenancePhaseForCron({
     maintenance: state.deps.cronConfig?.maintenance,
     userTimezone: state.deps.userTimezone,
@@ -562,6 +563,13 @@ export function reconcileMaintenancePhaseTransition(
           job.state.deferredMaintenanceCount = (job.state.deferredMaintenanceCount ?? 0) + 1;
           job.state.firstDeferredMaintenanceAtMs = entry.firstDeferredAtMs;
           job.state.lastDeferredMaintenanceAtMs = entry.lastDeferredAtMs;
+          // Transient replay priority: the collector uses this field
+          // (NOT the persistent `lastDeferredMaintenanceAtMs`) for the
+          // FIFO replay sort. The field is cleared after the deferred
+          // job is admitted so a recurring job deferred once does not
+          // outrank ordinary due jobs on later windows. See
+          // `collectRunnableJobs` in `service/timer-runnable.ts`.
+          job.state.pendingMaintenanceReplayAtMs = entry.lastDeferredAtMs;
           // Replay anchor: ensure the job is due so the next scheduler
           // tick admits it through the normal admission path. We use
           // `lastDeferredAtMs` as the floor (not `firstDeferredAtMs`) so
@@ -579,5 +587,30 @@ export function reconcileMaintenancePhaseTransition(
   }
 
   state.lastMaintenancePhase = current;
+
+  // ClawSweeper cycle 5d [P1] "Persist phase-exit replay before clearing
+  // its queue": the replay-anchor writes and the per-job diagnostics must
+  // survive the next store reload. Without this, a manual-run preflight
+  // or hot-reload that triggers `ensureLoaded({ forceReload: true })`
+  // would re-read the on-disk snapshot, lose the in-memory mutations,
+  // and the deferred jobs would never be replayed. The cron store is
+  // authoritative across reloads.
+  if (drainedCount > 0 && state.store && state.deps.storePath) {
+    try {
+      await saveCronStore(state.deps.storePath, state.store);
+    } catch (err) {
+      // Persist failure is non-fatal for the in-memory state: the
+      // scheduler still has the mutations in `state.store.jobs` and the
+      // diagnostics are already applied. A future force-reload may
+      // re-load the pre-replay snapshot, but the queue is already
+      // cleared and the diagnostics are recorded for the cycle. Log
+      // and continue.
+      state.deps.log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "cron: maintenance phase-exit persist failed; in-memory state retained",
+      );
+    }
+  }
+
   return { previous, current, drainedCount, phaseBegan };
 }
