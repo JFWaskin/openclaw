@@ -96,7 +96,7 @@ describe("phase-exit FIFO replay", () => {
     // Tick 1: inside the window. Phase is maintenance, all three are
     // deferred in A -> B -> C order via the public record path. The
     // store order does not matter — FIFO is bound to the deferral order.
-    reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     beginMaintenancePhase(AT_UTC_03_30);
     recordMaintenanceDeferral({ jobId: "job-A", agentId: "main", nowMs: AT_UTC_03_30 });
     recordMaintenanceDeferral({ jobId: "job-B", agentId: "secondary", nowMs: AT_UTC_03_30 + 1 });
@@ -104,7 +104,7 @@ describe("phase-exit FIFO replay", () => {
     expect(getMaintenanceDeferralCount()).toBe(3);
 
     // Phase exits. Replay happens here.
-    const phaseExit = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+    const phaseExit = await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
     expect(phaseExit.current).toBe("normal");
     expect(phaseExit.drainedCount).toBe(3);
     expect(getMaintenanceDeferralCount()).toBe(0);
@@ -137,14 +137,14 @@ describe("phase-exit FIFO replay", () => {
     // replay must not artificially push a job into the future.
     const job = makeJob("job-overdue", "main", AT_UTC_03_30 - 60_000);
     const state = await makeState([job]);
-    reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     beginMaintenancePhase(AT_UTC_03_30);
     recordMaintenanceDeferral({
       jobId: "job-overdue",
       agentId: "main",
       nowMs: AT_UTC_03_30,
     });
-    const phaseExit = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+    const phaseExit = await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
     expect(phaseExit.drainedCount).toBe(1);
     const storeJob = state.store?.jobs.find((j) => j.id === "job-overdue");
     // Original nextRunAtMs was AT_UTC_03_30 - 60_000. The replay anchor
@@ -159,10 +159,10 @@ describe("phase-exit FIFO replay", () => {
     const deferred = makeJob("job-def", "main", AT_UTC_03_30 - 60_000);
     const fresh = makeJob("job-fresh", "main", AT_UTC_03_30 - 60_000);
     const state = await makeState([fresh, deferred]);
-    reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     beginMaintenancePhase(AT_UTC_03_30);
     recordMaintenanceDeferral({ jobId: "job-def", agentId: "main", nowMs: AT_UTC_03_30 });
-    reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
     // job-fresh is still on the in-roster path (main is not in roster
     // so it would also defer). Force it to not be deferred by tweaking
     // the test: change its agent to ops so it never defers.
@@ -185,9 +185,9 @@ describe("phase-exit FIFO replay", () => {
     // empty across the cycle.
     const job = makeJob("job-A", "ops", AT_UTC_03_30 - 60_000); // in-roster
     const state = await makeState([job]);
-    const tEnter = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    const tEnter = await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     expect(tEnter.current).toBe("maintenance");
-    const tExit = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+    const tExit = await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
     expect(tExit.drainedCount).toBe(0);
     expect(getMaintenanceDeferralCount()).toBe(0);
     const storeJob = state.store?.jobs.find((j) => j.id === "job-A");

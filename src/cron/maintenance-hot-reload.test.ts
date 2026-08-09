@@ -66,7 +66,7 @@ describe("cron.maintenance.* hot reload", () => {
     expect(result.allowed).toBe(true);
     // The scheduler-owned phase transition is a no-op when the maintenance
     // block is absent: undefined -> normal, no bump, no drain.
-    const transition = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    const transition = await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     expect(transition.current).toBe("normal");
     expect(transition.phaseBegan).toBe(false);
     expect(transition.drainedCount).toBe(0);
@@ -98,7 +98,7 @@ describe("cron.maintenance.* hot reload", () => {
     });
     expect(result.phase).toBe("maintenance");
     expect(result.allowed).toBe(false);
-    const transition = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    const transition = await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     expect(transition.phaseBegan).toBe(true);
   });
 
@@ -113,7 +113,7 @@ describe("cron.maintenance.* hot reload", () => {
       maintenanceAgents: ["ops"],
     });
     expect(state.lastMaintenancePhase).toBeUndefined();
-    const transition = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    const transition = await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     expect(transition.previous).toBeUndefined();
     expect(transition.current).toBe("maintenance");
     expect(transition.phaseBegan).toBe(true);
@@ -128,7 +128,7 @@ describe("cron.maintenance.* hot reload", () => {
     });
     // 01:30 UTC == 01:30 wall clock UTC, before the 02:00-04:00 window.
     const beforeWindowUtc = AT_UTC_03_30 - 2 * 60 * 60_000;
-    const transition = reconcileMaintenancePhaseTransition(state, beforeWindowUtc);
+    const transition = await reconcileMaintenancePhaseTransition(state, beforeWindowUtc);
     expect(transition.previous).toBeUndefined();
     expect(transition.current).toBe("normal");
     expect(transition.phaseBegan).toBe(false);
@@ -209,7 +209,7 @@ describe("cron.maintenance.* hot reload", () => {
     });
     expect(beforeResult.phase).toBe("maintenance");
     // The state-level transition also fires for the before state.
-    const beforeTransition = reconcileMaintenancePhaseTransition(beforeState, AT_UTC_03_30);
+    const beforeTransition = await reconcileMaintenancePhaseTransition(beforeState, AT_UTC_03_30);
     expect(beforeTransition.phaseBegan).toBe(true);
 
     const afterState = await makeStateWithMaintenance({
@@ -233,7 +233,7 @@ describe("cron.maintenance.* hot reload", () => {
     });
     expect(afterResult.phase).toBe("normal");
     // The after state's first tick at 03:30 (outside the new window) is a no-op.
-    const afterTransition = reconcileMaintenancePhaseTransition(afterState, AT_UTC_03_30);
+    const afterTransition = await reconcileMaintenancePhaseTransition(afterState, AT_UTC_03_30);
     expect(afterTransition.phaseBegan).toBe(false);
     expect(afterTransition.drainedCount).toBe(0);
   });

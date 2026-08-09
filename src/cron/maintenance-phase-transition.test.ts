@@ -54,7 +54,7 @@ describe("reconcileMaintenancePhaseTransition", () => {
     // phase id must be bumped so the first deferral binds to the current
     // window rather than a hypothetical phase-0.
     const state = await makeState();
-    const t = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    const t = await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     expect(t.previous).toBeUndefined();
     expect(t.current).toBe("maintenance");
     expect(t.phaseBegan).toBe(true);
@@ -64,7 +64,7 @@ describe("reconcileMaintenancePhaseTransition", () => {
 
   it("first call records the current phase without bumping if maintenance is not active", async () => {
     const state = await makeState();
-    const t = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+    const t = await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
     expect(t.previous).toBeUndefined();
     expect(t.current).toBe("normal");
     expect(t.phaseBegan).toBe(false);
@@ -74,8 +74,8 @@ describe("reconcileMaintenancePhaseTransition", () => {
 
   it("no-op when the phase does not change", async () => {
     const state = await makeState();
-    reconcileMaintenancePhaseTransition(state, AT_UTC_03_30); // sets to maintenance
-    const t = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30 + 1_000);
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30); // sets to maintenance
+    const t = await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30 + 1_000);
     expect(t.previous).toBe("maintenance");
     expect(t.current).toBe("maintenance");
     expect(t.phaseBegan).toBe(false);
@@ -84,9 +84,9 @@ describe("reconcileMaintenancePhaseTransition", () => {
 
   it("bumps the phase id on normal -> maintenance transition", async () => {
     const state = await makeState();
-    reconcileMaintenancePhaseTransition(state, AT_UTC_01_30); // normal
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_01_30); // normal
     expect(state.lastMaintenancePhase).toBe("normal");
-    const t = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30); // -> maintenance
+    const t = await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30); // -> maintenance
     expect(t.previous).toBe("normal");
     expect(t.current).toBe("maintenance");
     expect(t.phaseBegan).toBe(true);
@@ -95,12 +95,12 @@ describe("reconcileMaintenancePhaseTransition", () => {
 
   it("drains the backlog on maintenance -> normal transition", async () => {
     const state = await makeState();
-    reconcileMaintenancePhaseTransition(state, AT_UTC_03_30); // -> maintenance
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30); // -> maintenance
     recordMaintenanceDeferral({ jobId: "job-A", agentId: "main", nowMs: AT_UTC_03_30 });
     recordMaintenanceDeferral({ jobId: "job-B", agentId: "main", nowMs: AT_UTC_03_30 + 1_000 });
     expect(getMaintenanceDeferralCount()).toBe(2);
 
-    const t = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00); // -> normal
+    const t = await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00); // -> normal
     expect(t.previous).toBe("maintenance");
     expect(t.current).toBe("normal");
     expect(t.phaseBegan).toBe(false);
@@ -114,7 +114,9 @@ describe("reconcileMaintenancePhaseTransition", () => {
       enabled: false,
       window: { start: "02:00", end: "04:00", timezone: "UTC" },
     });
-    expect(() => reconcileMaintenancePhaseTransition(state, AT_UTC_03_30)).not.toThrow();
+    expect(
+      async () => await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30),
+    ).not.toThrow();
     expect(state.lastMaintenancePhase).toBe("normal");
   });
 
@@ -128,14 +130,14 @@ describe("reconcileMaintenancePhaseTransition", () => {
 
     // First tick: outside the window, so phase is normal -> nothing happens.
     // previous is undefined, current is normal: no transition (no bump, no drain).
-    const t1 = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+    const t1 = await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
     expect(t1.drainedCount).toBe(0);
     // The stale entry is still there because the prior phase was undefined;
     // we only drain on an actual maintenance -> normal transition.
     expect(getMaintenanceDeferralCount()).toBe(1);
 
     // Next tick: same normal, no-op.
-    const t2 = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00 + 1_000);
+    const t2 = await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00 + 1_000);
     expect(t2.drainedCount).toBe(0);
   });
 
@@ -143,8 +145,8 @@ describe("reconcileMaintenancePhaseTransition", () => {
     const state = await makeState();
     // no logger assertions here; just confirm the call returns the structured
     // details that the scheduler's log lines use.
-    reconcileMaintenancePhaseTransition(state, AT_UTC_01_30);
-    const t = reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_01_30);
+    const t = await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     expect(t).toMatchObject({
       previous: "normal",
       current: "maintenance",

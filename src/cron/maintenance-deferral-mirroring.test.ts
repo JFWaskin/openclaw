@@ -85,7 +85,7 @@ describe("maintenance deferral mirror has a single owner (reconcile, not applyJo
 
     // Tick 1: inside the maintenance window. Job A is blocked, deferral
     // is recorded.
-    reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     const blocked = isRunnableJob({
       state,
       job,
@@ -98,7 +98,7 @@ describe("maintenance deferral mirror has a single owner (reconcile, not applyJo
     expect(storeJob?.state.deferredMaintenanceCount ?? 0).toBe(0);
 
     // Phase exits; reconcile mirrors the backlog and clears the queue.
-    const phaseExit = reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
+    const phaseExit = await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00);
     expect(phaseExit.current).toBe("normal");
     expect(phaseExit.drainedCount).toBe(1);
     // After reconcile: mirror is set EXACTLY ONCE.
@@ -136,7 +136,7 @@ describe("maintenance deferral mirror has a single owner (reconcile, not applyJo
     const state = await makeState(job);
 
     // Tick 1: inside the window. Deferral recorded.
-    reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_03_30);
     isRunnableJob({
       state,
       job,
@@ -152,7 +152,7 @@ describe("maintenance deferral mirror has a single owner (reconcile, not applyJo
     // reconcile at the SAME tick — but since lastMaintenancePhase is
     // already "normal" from the previous tick, the second reconcile is
     // a no-op (no transition). The count is still 1, not 2.
-    reconcileMaintenancePhaseTransition(state, AT_UTC_05_00); // exit
+    await reconcileMaintenancePhaseTransition(state, AT_UTC_05_00); // exit
     expect(storeJob?.state.deferredMaintenanceCount).toBe(1);
     isRunnableJob({
       state,

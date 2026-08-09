@@ -142,7 +142,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
 
     // Tick 1 (before any window): no maintenance active. All 6 jobs are due
     // and runnable.
-    reconcileMaintenancePhaseTransition(state, AT_NORMAL_BEFORE);
+    await reconcileMaintenancePhaseTransition(state, AT_NORMAL_BEFORE);
     let runnable = collectRunnableJobs(state, AT_NORMAL_BEFORE, {
       allowCronMissedRunByLastRun: true,
     });
@@ -153,7 +153,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
 
     // Tick 2 (inside window 1, MAINT_1): only ops jobs should run; main and
     // secondary should be deferred.
-    reconcileMaintenancePhaseTransition(state, AT_MAINT_1);
+    await reconcileMaintenancePhaseTransition(state, AT_MAINT_1);
     runnable = collectRunnableJobs(state, AT_MAINT_1, {
       allowCronMissedRunByLastRun: true,
     });
@@ -172,7 +172,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
 
     // Tick 3 (after window 1, AT_NORMAL_BETWEEN): phase exits, backlog is
     // mirrored to job.state and the queue is drained.
-    const tExit = reconcileMaintenancePhaseTransition(state, AT_NORMAL_BETWEEN);
+    const tExit = await reconcileMaintenancePhaseTransition(state, AT_NORMAL_BETWEEN);
     expect(tExit.previous).toBe("maintenance");
     expect(tExit.current).toBe("normal");
     expect(tExit.drainedCount).toBe(3);
@@ -223,7 +223,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
     const state = await makeStateWithJobs(jobs, twoWindowCfg);
 
     // Window 1: phase=maintenance, queue one deferral.
-    reconcileMaintenancePhaseTransition(state, AT_MAINT_1);
+    await reconcileMaintenancePhaseTransition(state, AT_MAINT_1);
     expect(state.lastMaintenancePhase).toBe("maintenance");
     // Manually record a deferral for the test scenario (simulating that
     // isRunnableJob admitted-then-deferred the main job in window 1).
@@ -236,7 +236,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
     expect(phaseId1).toMatch(/^phase-/);
 
     // Exit window 1: drain.
-    reconcileMaintenancePhaseTransition(state, AT_NORMAL_BETWEEN);
+    await reconcileMaintenancePhaseTransition(state, AT_NORMAL_BETWEEN);
     expect(getMaintenanceDeferralCount()).toBe(0);
     const countAfterExit = getStoreJob(state, "main-A").state.deferredMaintenanceCount ?? 0;
     expect(countAfterExit).toBeGreaterThanOrEqual(1);
@@ -245,7 +245,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
     // (05:30) is also outside the window. To simulate a "second window",
     // hot-swap the config and re-reconcile.
     state.deps = { ...state.deps, cronConfig: { maintenance: MAINT_CFG } };
-    const tReentry = reconcileMaintenancePhaseTransition(state, AT_MAINT_2);
+    const tReentry = await reconcileMaintenancePhaseTransition(state, AT_MAINT_2);
     expect(tReentry.phaseBegan).toBe(true);
     expect(state.lastMaintenancePhase).toBe("maintenance");
     isRunnableJob({
@@ -259,7 +259,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
     expect(phaseId2).not.toBe(phaseId1);
 
     // Exit window 2: the second deferral increments the per-job count.
-    reconcileMaintenancePhaseTransition(state, AT_NORMAL_AFTER);
+    await reconcileMaintenancePhaseTransition(state, AT_NORMAL_AFTER);
     const countAfterWindow2 = getStoreJob(state, "main-A").state.deferredMaintenanceCount ?? 0;
     expect(countAfterWindow2).toBeGreaterThan(countAfterExit);
   });
@@ -271,7 +271,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
     ];
     const state = await makeStateWithJobs(jobs);
 
-    reconcileMaintenancePhaseTransition(state, AT_MAINT_1);
+    await reconcileMaintenancePhaseTransition(state, AT_MAINT_1);
     isRunnableJob({
       state,
       job: getStoreJob(state, "main-X"),
@@ -312,7 +312,7 @@ describe("maintenance lifecycle: 6 jobs, 2 windows, 3 agents", () => {
       updatedAtMs: 0,
     };
     const state = await makeStateWithJobs([jobWithoutAgent]);
-    reconcileMaintenancePhaseTransition(state, AT_MAINT_1);
+    await reconcileMaintenancePhaseTransition(state, AT_MAINT_1);
     const runnable = collectRunnableJobs(state, AT_MAINT_1, {
       allowCronMissedRunByLastRun: true,
     });
