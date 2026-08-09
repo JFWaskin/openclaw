@@ -497,7 +497,15 @@ async function dispatchPendingWakeGroup(params: {
               (pendingWake.tasks?.length ||
                 pendingWake.intent === "task" ||
                 pendingWake.intent === "event" ||
-                pendingWake.intent === "immediate")));
+                pendingWake.intent === "immediate" ||
+                // ClawSweeper cycle 5d [P1] "Retain scheduled heartbeat
+                // deferrals until the window ends": a `scheduled` wake
+                // that the maintenance window has deferred is a
+                // first-class retry case, not garbage. The wake is
+                // retained so the next dispatch loop re-attempts it
+                // after `shouldDeferWake` clears (i.e. the window has
+                // exited and `retryAtMs` is in the past).
+                pendingWake.intent === "scheduled")));
         handOffPendingWakeBatch(wakes, wakeIndex + (retainWake ? 0 : 1));
         return;
       }
@@ -509,7 +517,10 @@ async function dispatchPendingWakeGroup(params: {
         (pendingWake.tasks?.length ||
           pendingWake.intent === "task" ||
           pendingWake.intent === "event" ||
-          pendingWake.intent === "immediate")
+          pendingWake.intent === "immediate" ||
+          // See retention comment above: scheduled wakes are a
+          // retry case under the maintenance window.
+          pendingWake.intent === "scheduled")
       ) {
         // Retain real task/event work until its spacing guard allows a retry.
         const retryAtMs = Math.max(Date.now(), result.retryAtMs ?? Date.now() + DEFAULT_RETRY_MS);
