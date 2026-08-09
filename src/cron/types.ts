@@ -372,6 +372,16 @@ export type CronJobState = {
   deferredMaintenanceCount?: number;
   firstDeferredMaintenanceAtMs?: number | null;
   lastDeferredMaintenanceAtMs?: number | null;
+  /**
+   * Transient replay priority: set by the phase-exit mirror to the
+   * `lastDeferredAtMs` of the held entry, then cleared after the
+   * deferred job is admitted. The collector sorts admitted jobs by
+   * this field ascending so the FIFO replay order is honored on the
+   * first tick after the window exits; the field MUST be cleared
+   * before that tick returns so a recurring job deferred once does
+   * not outrank ordinary due jobs forever.
+   */
+  pendingMaintenanceReplayAtMs?: number | null;
   /** Exact startup catch-up slot protected from future-slot repair across restarts. */
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */

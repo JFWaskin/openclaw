@@ -213,16 +213,23 @@ export function collectRunnableJobs(
     }),
   );
   // FIFO replay ordering: jobs deferred by the maintenance window have
-  // `lastDeferredMaintenanceAtMs` set by the phase-exit mirror. The replay
-  // MUST preserve the deferral order so the contract advertised in the
-  // operator docs is honoured. Jobs without a deferral timestamp sort
-  // last (their natural nextRunAtMs ordering is preserved by the
-  // scheduler's due-check, but for the in-this-tick set we use
-  // `nextRunAtMs` ascending as the secondary key).
-  if (admitted.some((job) => typeof job.state?.lastDeferredMaintenanceAtMs === "number")) {
-    return [...admitted].toSorted((a, b) => {
-      const aDef = a.state?.lastDeferredMaintenanceAtMs;
-      const bDef = b.state?.lastDeferredMaintenanceAtMs;
+  // `pendingMaintenanceReplayAtMs` set by the phase-exit mirror. The
+  // replay MUST preserve the deferral order so the contract advertised
+  // in the operator docs is honoured. The replay is a ONE-SHOT —
+  // `pendingMaintenanceReplayAtMs` is cleared on the first tick that
+  // admits the deferred job (here), so a recurring job deferred once
+  // does not outrank ordinary due jobs on later windows. The
+  // historical `lastDeferredMaintenanceAtMs` (which is the per-job
+  // diagnostic count anchor) is NEVER used for ordering; using it
+  // here would make the field permanent replay priority, which is
+  // the cycle 5d [P1] regression.
+  const hasReplay = admitted.some(
+    (job) => typeof job.state?.pendingMaintenanceReplayAtMs === "number",
+  );
+  if (hasReplay) {
+    const sorted = [...admitted].toSorted((a, b) => {
+      const aDef = a.state?.pendingMaintenanceReplayAtMs;
+      const bDef = b.state?.pendingMaintenanceReplayAtMs;
       const aHas = typeof aDef === "number";
       const bHas = typeof bDef === "number";
       if (aHas && bHas) {
@@ -236,6 +243,16 @@ export function collectRunnableJobs(
       }
       return (a.state?.nextRunAtMs ?? 0) - (b.state?.nextRunAtMs ?? 0);
     });
+    // Clear the transient replay priority on every admitted job, so
+    // the next tick uses ordinary `nextRunAtMs` ordering. The
+    // historical diagnostics (`lastDeferredMaintenanceAtMs`,
+    // `deferredMaintenanceCount`) are preserved.
+    for (const job of sorted) {
+      if (typeof job.state?.pendingMaintenanceReplayAtMs === "number") {
+        job.state.pendingMaintenanceReplayAtMs = null;
+      }
+    }
+    return sorted;
   }
   return admitted;
 }

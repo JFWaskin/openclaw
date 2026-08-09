@@ -496,6 +496,13 @@ export const CronJobStateSchema = closedObject({
   lastDeferredMaintenanceAtMs: Type.Optional(
     Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   ),
+  // Transient replay priority: set by the phase-exit mirror and cleared
+  // after the deferred job is admitted. Reported for diagnostics; not
+  // patchable. Distinct from the historical `lastDeferredMaintenanceAtMs`
+  // which persists across the job's lifetime.
+  pendingMaintenanceReplayAtMs: Type.Optional(
+    Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  ),
 });
 
 const CronJobStatePatchSchema = closedObject({
