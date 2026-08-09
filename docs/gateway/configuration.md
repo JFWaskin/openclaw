@@ -410,13 +410,20 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
       cron: {
         enabled: true,
         sessionRetention: "24h",
+        maintenance: {
+          enabled: false,
+          window: { start: "02:00", end: "04:00", timezone: "user" },
+          maintenanceAgents: ["ops"],
+          allowManualRun: false,
+        },
       },
     }
     ```
 
     - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` to disable).
     - Run history automatically keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
-    - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
+    - `maintenance`: opt-in daily window where non-roster cron and heartbeat work is deferred. `window` is the daily local-time window (`start < end`; cross-midnight is rejected); `timezone` defaults to `agents.defaults.userTimezone`, falls back to `local` / `UTC`. `maintenanceAgents` is the allowlist (empty or missing = all agents deferred). `allowManualRun: true` lets `cron run` bypass the gate; `mode: "force"` always pierces. Scheduled and heartbeat runs are never affected by `allowManualRun`.
+    - See [Cron jobs](/automation/cron-jobs) and [Maintenance window](/automation/maintenance-window) for the deferral + replay contract and role-isolation behaviour.
 
   </Accordion>
 
