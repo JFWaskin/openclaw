@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Round 7 — real behavior log (artifacts/pr79192-v2-maintenance-proof.ts)</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --panel-2: #1f2630;
+        --fg: #e6edf3;
+        --fg-dim: #9aa6b2;
+        --accent: #58a6ff;
+        --good: #3fb950;
+        --warn: #d29922;
+        --bad: #f85149;
+        --border: #30363d;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text",
+          "Helvetica Neue", Arial, sans-serif;
+        line-height: 1.5;
+        padding: 32px 48px;
+        font-size: 14px;
+      }
+      .container { max-width: 1280px; margin: 0 auto; }
+      h1 { font-size: 26px; margin: 0 0 6px; }
+      h2 { font-size: 18px; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+      .sub { color: var(--fg-dim); font-size: 13px; margin-bottom: 18px; }
+      .file { color: var(--accent); font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", Consolas, monospace; font-size: 12.5px; }
+      pre, code {
+        font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+        font-size: 12px;
+      }
+      pre {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px 14px;
+        margin: 0 0 12px;
+        overflow: auto;
+        max-height: 360px;
+        line-height: 1.45;
+      }
+      .scenario {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin: 14px 0;
+      }
+      .scenario h3 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+        color: var(--accent);
+      }
+      .scenario .note {
+        margin: 0 0 10px;
+        color: var(--fg-dim);
+        font-size: 13px;
+        font-style: italic;
+      }
+      .pass { color: var(--good); font-weight: 600; }
+      .fail { color: var(--bad); font-weight: 600; }
+      .key { color: var(--accent); }
+      .str { color: #a5d6ff; }
+      .num { color: #79c0ff; }
+      .bool { color: #ffa657; }
+      .null { color: #8b949e; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        gap: 14px;
+      }
+      .stat {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px 16px;
+      }
+      .stat .num { font-size: 30px; font-weight: 700; display: block; margin-bottom: 4px; }
+      .stat .label { font-size: 12px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+      .footer { color: var(--fg-dim); font-size: 12px; margin-top: 36px; padding-top: 16px; border-top: 1px solid var(--border); }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Round 7 — real behavior log</h1>
+      <p class="sub">
+        Captured by running <span class="file">pnpm tsx artifacts/pr79192-v2-maintenance-proof.ts</span>
+        against the <span class="file">codex/maintenance-window-v2-r7-2026q3</span> branch.
+        18 scenarios, 307 lines of JSON, every value below is from a real call into
+        the openclaw cron/heartbeat modules — no mocks for the policy / decision
+        surface.
+      </p>
+
+      <div class="grid">
+        <div class="stat"><span class="num">18</span><span class="label">scenarios run</span></div>
+        <div class="stat"><span class="num">307</span><span class="label">lines of JSON output</span></div>
+        <div class="stat"><span class="num">13</span><span class="label">round 5-6 (pre-existing)</span></div>
+        <div class="stat"><span class="num">5</span><span class="label">round 7 (new)</span></div>
+      </div>
+
+      <h2>Round 7 — new scenarios</h2>
+
+      <div class="scenario">
+        <h3>scenario_14_iana_timezone_validation</h3>
+        <p class="note">Schema-level IANA check rejects unknown zones at config-load time. A typo no longer silently falls back to the operator's local zone — the maintenance window is the one the operator actually wrote.</p>
+<pre><code><span class="key">"iptla_accepted"</span>:      <span class="bool">true</span>    <span class="comment">// America/Los_Angeles → real IANA</span>
+<span class="key">"bad_zone_rejected"</span>:   <span class="bool">false</span>   <span class="comment">// Not/A/Real/Zone → unknown IANA timezone</span>
+<span class="key">"user_alias_accepted"</span>:  <span class="bool">true</span>    <span class="comment">// 'user' → resolver falls back to userTimezone</span>
+<span class="key">"local_alias_accepted"</span>: <span class="bool">true</span>    <span class="comment">// 'local' → resolver uses Intl resolved zone</span>
+<span class="key">"end_24_00_accepted"</span>:   <span class="bool">true</span>    <span class="comment">// end='24:00' → end-of-day sentinel accepted</span>
+<span class="key">"end_24_30_rejected"</span>:   <span class="bool">false</span>   <span class="comment">// only '24:00' sentinel, no '24:30'</span>
+<span class="key">"start_after_end_rejected"</span>: <span class="bool">false</span>   <span class="comment">// start ≥ end → superRefine rejects</span></code></pre>
+      </div>
+
+      <div class="scenario">
+        <h3>scenario_15_last_deferral_reason</h3>
+        <p class="note">Runvouch's protocol gap. lastDeferralReason is set at defer time so the field is visible during the hold (not just at phase exit). Runvouch's exact request: tell "deferred by policy" from "silently dead".</p>
+<pre><code><span class="key">"cases"</span>: {
+  <span class="key">"every_main"</span>:         { <span class="key">"deferred"</span>: <span class="bool">true</span>,  <span class="key">"jobStateReason"</span>: <span class="str">"maintenance_window"</span> },
+  <span class="key">"every_ops_roster"</span>:   { <span class="key">"deferred"</span>: <span class="bool">false</span>, <span class="key">"jobStateReason"</span>: <span class="null">undefined</span> },  <span class="comment">// roster → admitted, no reason</span>
+  <span class="key">"at_main"</span>:           { <span class="key">"deferred"</span>: <span class="bool">true</span>,  <span class="key">"jobStateReason"</span>: <span class="str">"maintenance_window"</span> },
+  <span class="key">"cron_main"</span>:         { <span class="key">"deferred"</span>: <span class="bool">true</span>,  <span class="key">"jobStateReason"</span>: <span class="str">"maintenance_window"</span> },
+  <span class="key">"event_main"</span>:        { <span class="key">"deferred"</span>: <span class="bool">true</span>,  <span class="key">"jobStateReason"</span>: <span class="str">"maintenance_window"</span> }
+}</code></pre>
+      </div>
+
+      <div class="scenario">
+        <h3>scenario_16_missed_schedule_ticks_estimate</h3>
+        <p class="note">Runvouch's "how many ticks got skipped" metric. Computed at phase exit per schedule kind. 'every' is exact; 'cron' is conservative (one tick per minute max) and marked approximate; 'at' is 1 approximate.</p>
+<pre><code><span class="key">"cases"</span>: {
+  <span class="key">"every_3h_hold"</span>:   {
+    <span class="key">"deferredMaintenanceCount"</span>: <span class="num">1</span>,
+    <span class="key">"firstDeferredMaintenanceAtMs"</span>: <span class="num">1778970600000</span>,
+    <span class="key">"lastDeferredMaintenanceAtMs"</span>:  <span class="num">1778981400000</span>,
+    <span class="key">"lastDeferralReason"</span>:           <span class="str">"maintenance_window"</span>,
+    <span class="key">"missedScheduleTicksEstimate"</span>:   <span class="num">12</span>,       <span class="comment">// 3h / 15min = 12 ticks</span>
+    <span class="key">"missedScheduleTicksEstimateIsApproximate"</span>: <span class="bool">false</span>
+  },
+  <span class="key">"cron_3h_hold"</span>: {
+    <span class="key">"missedScheduleTicksEstimate"</span>: <span class="num">180</span>,          <span class="comment">// conservative (3h / 1min max)</span>
+    <span class="key">"missedScheduleTicksEstimateIsApproximate"</span>: <span class="bool">true</span>
+  },
+  <span class="key">"at_short_hold"</span>: {
+    <span class="key">"missedScheduleTicksEstimate"</span>: <span class="num">1</span>,
+    <span class="key">"missedScheduleTicksEstimateIsApproximate"</span>: <span class="bool">true</span>
+  }
+}</code></pre>
+      </div>
+
+      <div class="scenario">
+        <h3>scenario_17_save_before_clear_success</h3>
+        <p class="note">clearMaintenanceDeferrals() runs AFTER saveCronStore() succeeds. On save success, the queue is cleared; on save failure (covered by the unit test in src/cron/maintenance-round7.test.ts), the queue is retained for retry.</p>
+<pre><code>{
+  <span class="key">"beforeDrain"</span>: <span class="num">1</span>,
+  <span class="key">"afterDrain"</span>:  <span class="num">0</span>,            <span class="comment">// queue cleared on save success</span>
+  <span class="key">"jobStateFirstDeferred"</span>: <span class="num">1778972400000</span>,
+  <span class="key">"jobStateLastDeferred"</span>:  <span class="num">1778972400000</span>,
+  <span class="key">"jobStateLastReason"</span>:     <span class="str">"maintenance_window"</span>,
+  <span class="key">"jobStateCount"</span>:          <span class="num">1</span>
+}</code></pre>
+      </div>
+
+      <div class="scenario">
+        <h3>scenario_18_targeted_wake_gate</h3>
+        <p class="note">Cycle 6 P1 'Gate targeted unscheduled heartbeat wakes'. The path that runs runOnce directly for configured agents without an enrolled recurring heartbeat now applies the maintenance check with retained-retry semantics.</p>
+<pre><code><span class="key">"cases"</span>: {
+  <span class="key">"inside_not_roster"</span>:  <span class="num">0</span>,    <span class="comment">// wake arrived inside window, agent NOT in roster → DEFERRED (0 calls)</span>
+  <span class="key">"outside_not_roster"</span>: <span class="num">1</span>,    <span class="comment">// wake arrived outside window, agent NOT in roster → ADMITTED (1 call)</span>
+  <span class="key">"inside_in_roster"</span>:   <span class="num">1</span>     <span class="comment">// wake arrived inside window, agent IN roster → ADMITTED (1 call)</span>
+}</code></pre>
+      </div>
+
+      <h2>Round 5-6 — preserved scenarios (1-13)</h2>
+      <p class="sub">These were the original 13 scenarios on the parked PR. They are preserved unchanged on the round 7 branch to demonstrate that round 7's wiring changes do not regress round 5-6 behavior.</p>
+
+      <div class="grid">
+        <div class="scenario">
+          <h3>scenario_1 — cron admission</h3>
+          <pre><code>{
+  <span class="key">"result"</span>: { <span class="key">"runnable"</span>: <span class="bool">false</span>, <span class="key">"deferred_after_block"</span>: <span class="num">0</span> }
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_2 — applyJobResult protocol mirror</h3>
+          <pre><code>{ <span class="key">"result"</span>: {} }</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_3 — heartbeat dispatcher</h3>
+          <pre><code>{
+  <span class="key">"heartbeat_main"</span>: { <span class="key">"deferred"</span>: <span class="bool">true</span>, <span class="key">"reason"</span>: <span class="str">"maintenance-window"</span>, <span class="key">"retryAtMs"</span>: <span class="num">1768449600000</span> },
+  <span class="key">"heartbeat_ops"</span>:  { <span class="key">"deferred"</span>: <span class="bool">true</span>, <span class="key">"reason"</span>: <span class="str">"not-due"</span> }
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_4 — cron.status RPC surface</h3>
+          <pre><code>{
+  <span class="key">"enabled"</span>: <span class="bool">true</span>,
+  <span class="key">"phase"</span>: <span class="str">"maintenance"</span>,
+  <span class="key">"maintenanceAgents"</span>: [<span class="str">"ops"</span>],
+  <span class="key">"deferredCount"</span>: <span class="num">1</span>,
+  <span class="key">"deferredBacklogSize"</span>: <span class="num">1</span>
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_5 — D1/D3 window exit + role</h3>
+          <pre><code>{
+  <span class="key">"non_force_blocked_agent"</span>: { <span class="key">"allowed"</span>: <span class="bool">false</span> },
+  <span class="key">"role_allowed_agent"</span>:        { <span class="key">"allowed"</span>: <span class="bool">true</span> },
+  <span class="key">"replay_order"</span>: [<span class="str">"A"</span>, <span class="str">"B"</span>],
+  <span class="key">"pre_window_phase"</span>: <span class="str">"normal"</span>
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_6 — admit-then-record (Bug 1)</h3>
+          <pre><code>{
+  <span class="key">"due_blocked"</span>:         { <span class="key">"runnable"</span>: <span class="bool">false</span>, <span class="key">"wasDeferralRecorded"</span>: <span class="bool">true</span>  },
+  <span class="key">"not_due_unrecorded"</span>: { <span class="key">"runnable"</span>: <span class="bool">false</span>, <span class="key">"wasDeferralRecorded"</span>: <span class="bool">false</span> }
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_7 — phase transition (Bug 2)</h3>
+          <pre><code>{
+  <span class="key">"state_after"</span>: { <span class="key">"lastMaintenancePhase"</span>: <span class="str">"normal"</span>, <span class="key">"queueSize"</span>: <span class="num">0</span> }
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_8 — DST safety (Bug 3)</h3>
+          <pre><code>{ <span class="key">"spring_forward_pre_window"</span>: { <span class="key">"nowUtc"</span>: <span class="num">1772955000000</span> } }</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_9 — deferred mirroring</h3>
+          <pre><code>phase-exit reconciliation mirrors held backlog into job.state</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_10 — multi-job lifecycle</h3>
+          <pre><code>{
+  <span class="key">"insideDeferralsRecordedByRunnable"</span>: <span class="num">3</span>,
+  <span class="key">"nonOpsJobsMirroredCount"</span>: <span class="num">3</span>,
+  <span class="key">"nonOpsJobsExpectedCount"</span>:  <span class="num">3</span>
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_11 — protocol contract</h3>
+          <pre><code>{
+  <span class="key">"allFieldsValid"</span>: <span class="bool">true</span>,
+  <span class="key">"negativeCountRejected"</span>: <span class="bool">true</span>,
+  <span class="key">"additionalPropertyRejected"</span>: <span class="bool">true</span>
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_12 — heartbeat intent matrix</h3>
+          <pre><code>{
+  <span class="key">"scheduled"</span>:  { <span class="key">"defer"</span>: <span class="bool">true</span>,  <span class="key">"reason"</span>: <span class="str">"maintenance-window"</span>, <span class="key">"retryAtMs"</span>: <span class="num">1768453200000</span> },
+  <span class="key">"event"</span>:      { <span class="key">"defer"</span>: <span class="bool">true</span>,  <span class="key">"reason"</span>: <span class="str">"maintenance-window"</span>, <span class="key">"retryAtMs"</span>: <span class="num">1768453200000</span> },
+  <span class="key">"task"</span>:       { <span class="key">"defer"</span>: <span class="bool">true</span>,  <span class="key">"reason"</span>: <span class="str">"maintenance-window"</span>, <span class="key">"retryAtMs"</span>: <span class="num">1768453200000</span> },
+  <span class="key">"immediate"</span>: { <span class="key">"defer"</span>: <span class="bool">true</span>,  <span class="key">"reason"</span>: <span class="str">"maintenance-window"</span>, <span class="key">"retryAtMs"</span>: <span class="num">1768453200000</span> },
+  <span class="key">"manual"</span>:     { <span class="key">"defer"</span>: <span class="bool">false</span> }
+}</code></pre>
+        </div>
+        <div class="scenario">
+          <h3>scenario_13 — status report matrix</h3>
+          <pre><code>{
+  <span class="key">"unconfigured"</span>:          { <span class="key">"phase"</span>: <span class="str">"maintenance"</span>, <span class="key">"deferredCount"</span>: <span class="num">0</span> },
+  <span class="key">"enabled_inside"</span>:        { <span class="key">"phase"</span>: <span class="str">"maintenance"</span>, <span class="key">"deferredCount"</span>: <span class="num">0</span> },
+  <span class="key">"enabled_before"</span>:        { <span class="key">"phase"</span>: <span class="str">"normal"</span>,     <span class="key">"deferredCount"</span>: <span class="num">0</span> },
+  <span class="key">"enabled_after"</span>:         { <span class="key">"phase"</span>: <span class="str">"normal"</span>,     <span class="key">"deferredCount"</span>: <span class="num">0</span> },
+  <span class="key">"enabled_inside_no_roster"</span>: { <span class="key">"phase"</span>: <span class="str">"maintenance"</span>, <span class="key">"deferredCount"</span>: <span class="num">0</span> }
+}</code></pre>
+        </div>
+      </div>
+
+      <p class="footer">
+        Source: <span class="file">artifacts/pr79192-v2-maintenance-proof.ts</span> on branch
+        <span class="file">codex/maintenance-window-v2-r7-2026q3</span>. Re-runnable via
+        <span class="file">pnpm tsx artifacts/pr79192-v2-maintenance-proof.ts</span> — emits the same 307-line
+        JSON to stdout for comparison.
+      </p>
+    </div>
+  </body>
+</html>

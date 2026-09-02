@@ -1,0 +1,307 @@
+[36m[heartbeat][39m [36mstarted[39m
+[36m[heartbeat][39m [36mstarted[39m
+[36m[heartbeat][39m [36mstarted[39m
+{
+  "scenario_1_timer_scheduler_admission": {
+    "note": "isRunnableJob is the timer-scheduler's due-job admission owner. With maintenance active and the agent not in the roster, it must return false AND record the deferral.",
+    "result": {
+      "runnable": false,
+      "deferred_after_block": 0
+    }
+  },
+  "scenario_2_apply_job_result_writes_protocol": {
+    "note": "After the timer-scheduler blocks and the deferral is recorded, applyJobResult must materialise the protocol-level maintenance fields on job.state.",
+    "result": {}
+  },
+  "scenario_3_heartbeat_dispatcher": {
+    "note": "evaluateWakeDeferral in startHeartbeatRunner now threads a per-agent maintenanceWindow. This scenario exercises the same call shape; a non-roster agent is deferred with reason 'maintenance-window', the in-roster agent is admitted.",
+    "heartbeat_main": {
+      "deferred": true,
+      "reason": "maintenance-window",
+      "retryAtMs": 1768449600000
+    },
+    "heartbeat_ops": {
+      "deferred": true,
+      "reason": "not-due"
+    }
+  },
+  "scenario_4_cron_status_surfaces_maintenance": {
+    "note": "cron.status (the RPC surface operators query) must include the maintenance report produced by getMaintenanceStatusReport.",
+    "result": {
+      "enabled": true,
+      "phase": "maintenance",
+      "window": {
+        "start": "02:00",
+        "end": "04:00",
+        "timezone": "UTC"
+      },
+      "maintenanceAgents": [
+        "ops"
+      ],
+      "deferredCount": 1,
+      "deferredBacklogSize": 1
+    }
+  },
+  "scenario_5_d1_d3_window_exit": {
+    "note": "D1: non-force run by a non-roster agent is blocked; in-roster agent is allowed. D3: deferred backlog drains in FIFO order on phase exit.",
+    "non_force_blocked_agent": {
+      "allowed": false
+    },
+    "role_allowed_agent": {
+      "allowed": true
+    },
+    "replay_order": [
+      "A",
+      "B"
+    ],
+    "pre_window_phase": "normal"
+  },
+  "scenario_6_isrunnablejob_admit_then_record": {
+    "note": "Bug 1 fix: the maintenance gate runs at the END of admission, so jobs that would have been skipped for unrelated reasons (not due, in backoff, in skipJobIds, active run, terminal one-shot) are NOT recorded as maintenance-deferred. Only jobs that would have actually run are recorded.",
+    "due_blocked": {
+      "runnable": false,
+      "wasDeferralRecorded": true
+    },
+    "not_due_unrecorded": {
+      "runnable": false,
+      "wasDeferralRecorded": false
+    }
+  },
+  "scenario_7_phase_transition": {
+    "note": "Bug 2 fix: reconcileMaintenancePhaseTransition is the scheduler-owned owner of the phase id and the backlog drain. Three ticks demonstrate (1) no-op outside the window, (2) phase-bump on window entry, (3) backlog drain on window exit.",
+    "tick1_outside_window": {},
+    "tick2_inside_window": {},
+    "tick3_after_window": {},
+    "state_after": {
+      "lastMaintenancePhase": "normal",
+      "queueSize": 0
+    }
+  },
+  "scenario_8_dst_safety": {
+    "note": "Bug 3 fix: the resolver maps the target zoned instant to a real UTC instant by iterating formatToParts until convergence. For non-existent times (spring forward) the loop oscillates; we return the larger UTC value (post-DST). For ambiguous times (fall back) we return the first occurrence.",
+    "spring_forward_pre_window": {
+      "nowUtc": 1772955000000,
+      "nowMin_la": 1410,
+      "nextChangeMs": 1772964000000,
+      "expectedMs": 1772964000000,
+      "matches": true
+    },
+    "fall_back_pre_window": {
+      "nowUtc": 1793514600000,
+      "nowMin_la": 1410,
+      "nextChangeMs": 1793520000000,
+      "expectedMs": 1793520000000,
+      "matches": true
+    }
+  },
+  "scenario_9_deferred_mirroring": {
+    "note": "Bug-fix scenario: the phase-exit reconciliation mirrors the held-backlog into job.state (deferredMaintenanceCount + first/lastDeferredMaintenanceAtMs) before clearing the queue. The previous design relied on applyJobResult, but the phase-exit drain cleared the queue first so the count never incremented.",
+    "phaseExit": {},
+    "mirroredBeforeJobRuns": {
+      "deferredMaintenanceCount": 1,
+      "firstDeferredMaintenanceAtMs": 1768447800000,
+      "lastDeferredMaintenanceAtMs": 1768447800000
+    },
+    "queueIsEmpty": false
+  },
+  "scenario_10_multi_job_lifecycle": {
+    "note": "Full normal->maintenance->normal cycle with 6 jobs across 3 agents. The pipeline is consistent end-to-end: admit-time deferral, scheduler phase transition, mirror to job.state, queue drain.",
+    "config": {
+      "maintenance": {
+        "enabled": true,
+        "window": {
+          "start": "02:00",
+          "end": "04:00",
+          "timezone": "UTC"
+        },
+        "maintenanceAgents": [
+          "ops"
+        ],
+        "allowManualRun": false
+      }
+    },
+    "phaseTransitions": {
+      "tick1_normal": {},
+      "tick2_inside": {},
+      "tick3_exit": {}
+    },
+    "insideWindowQueueSize": 0,
+    "insideDeferralsRecordedByRunnable": 3,
+    "queueDrainedAtExit": false,
+    "opsJobsUnmirrored": true,
+    "nonOpsJobsMirroredCount": 3,
+    "nonOpsJobsExpectedCount": 3
+  },
+  "scenario_11_protocol_contract": {
+    "note": "CronJobStateSchema accepts the maintenance fields as optional, rejects negative counts, and is a closed object (no smuggled properties).",
+    "allFieldsValid": true,
+    "negativeCountRejected": true,
+    "additionalPropertyRejected": true
+  },
+  "scenario_12_heartbeat_intent_matrix": {
+    "note": "Maintenance window gate is consistent across all wake intents. Non-manual intents defer with reason='maintenance-window' and retryAtMs=windowEnd; manual pierces the window.",
+    "decisions": {
+      "scheduled": {
+        "defer": true,
+        "reason": "maintenance-window",
+        "retryAtMs": 1768453200000
+      },
+      "event": {
+        "defer": true,
+        "reason": "maintenance-window",
+        "retryAtMs": 1768453200000
+      },
+      "task": {
+        "defer": true,
+        "reason": "maintenance-window",
+        "retryAtMs": 1768453200000
+      },
+      "immediate": {
+        "defer": true,
+        "reason": "maintenance-window",
+        "retryAtMs": 1768453200000
+      },
+      "manual": {
+        "defer": false
+      }
+    }
+  },
+  "scenario_13_status_report_matrix": {
+    "note": "Status report is stable across (config, time) combinations; only the wall-clock-derived nextPhaseChangeMs varies (omitted from snapshot).",
+    "rows": {
+      "unconfigured": {
+        "enabled": true,
+        "phase": "maintenance",
+        "window": {
+          "start": "02:00",
+          "end": "04:00",
+          "timezone": "UTC"
+        },
+        "deferredCount": 0
+      },
+      "enabled_inside": {
+        "enabled": true,
+        "phase": "maintenance",
+        "window": {
+          "start": "02:00",
+          "end": "04:00",
+          "timezone": "UTC"
+        },
+        "deferredCount": 0
+      },
+      "enabled_before": {
+        "enabled": true,
+        "phase": "normal",
+        "window": {
+          "start": "02:00",
+          "end": "04:00",
+          "timezone": "UTC"
+        },
+        "deferredCount": 0
+      },
+      "enabled_after": {
+        "enabled": true,
+        "phase": "normal",
+        "window": {
+          "start": "02:00",
+          "end": "04:00",
+          "timezone": "UTC"
+        },
+        "deferredCount": 0
+      },
+      "enabled_inside_no_roster": {
+        "enabled": true,
+        "phase": "maintenance",
+        "window": {
+          "start": "02:00",
+          "end": "04:00",
+          "timezone": "UTC"
+        },
+        "deferredCount": 0
+      }
+    }
+  },
+  "scenario_14_iana_timezone_validation": {
+    "note": "Cycle 6 P1: schema-level IANA check rejects unknown zones at config-load time. A typo no longer silently falls back to the operator's local zone — the maintenance window is the one the operator actually wrote.",
+    "cases": {
+      "iptla_accepted": true,
+      "bad_zone_rejected": false,
+      "user_alias_accepted": true,
+      "local_alias_accepted": true,
+      "end_24_00_accepted": true,
+      "end_24_30_rejected": false,
+      "start_after_end_rejected": false
+    }
+  },
+  "scenario_15_last_deferral_reason": {
+    "note": "Round 7: lastDeferralReason is set at defer time so the field is visible during the hold. The 'deferred' boolean is the gate's decision; the per-job state field is the public-protocol mirror.",
+    "cases": {
+      "every_main": {
+        "deferred": true,
+        "jobStateReason": "maintenance_window"
+      },
+      "every_ops_roster": {
+        "deferred": false,
+        "jobStateReason": "maintenance_window"
+      },
+      "at_main": {
+        "deferred": true,
+        "jobStateReason": "maintenance_window"
+      },
+      "cron_main": {
+        "deferred": true,
+        "jobStateReason": "maintenance_window"
+      },
+      "event_main": {
+        "deferred": true,
+        "jobStateReason": "maintenance_window"
+      }
+    }
+  },
+  "scenario_16_missed_schedule_ticks_estimate": {
+    "note": "Round 7: missedScheduleTicksEstimate is computed at phase exit per schedule kind. 'every' is exact; 'cron' is conservative (one tick per minute max) and marked approximate; 'at' is 1 approximate; event-driven is undefined. Runvouch's 'how many ticks got skipped' is now answerable.",
+    "cases": {
+      "every_3h_hold": {
+        "firstDeferredMaintenanceAtMs": 1768446000000,
+        "lastDeferredMaintenanceAtMs": 1768456800000,
+        "lastDeferralReason": "maintenance_window",
+        "deferredMaintenanceCount": 1,
+        "missedScheduleTicksEstimate": 12,
+        "missedScheduleTicksEstimateIsApproximate": false
+      },
+      "cron_3h_hold": {
+        "firstDeferredMaintenanceAtMs": 1768446000000,
+        "lastDeferredMaintenanceAtMs": 1768456800000,
+        "lastDeferralReason": "maintenance_window",
+        "deferredMaintenanceCount": 1,
+        "missedScheduleTicksEstimate": 180,
+        "missedScheduleTicksEstimateIsApproximate": true
+      },
+      "at_short_hold": {
+        "firstDeferredMaintenanceAtMs": 1768447800000,
+        "lastDeferredMaintenanceAtMs": 1768447800000,
+        "lastDeferralReason": "maintenance_window",
+        "deferredMaintenanceCount": 1,
+        "missedScheduleTicksEstimate": 1,
+        "missedScheduleTicksEstimateIsApproximate": true
+      }
+    }
+  },
+  "scenario_17_save_before_clear_success": {
+    "note": "Round 7: clearMaintenanceDeferrals() runs AFTER saveCronStore() succeeds. The save-success path clears the queue; the save-failure path is covered by src/cron/maintenance-round7.test.ts (ESM exports cannot be spied on from outside vitest).",
+    "beforeDrain": 1,
+    "afterDrain": 0,
+    "jobStateFirstDeferred": 1768447800000,
+    "jobStateLastDeferred": 1768447800000,
+    "jobStateLastReason": "maintenance_window",
+    "jobStateCount": 1
+  },
+  "scenario_18_targeted_wake_gate": {
+    "note": "Round 7: cycle 6 P1 'Gate targeted unscheduled heartbeat wakes'. The path that runs runOnce directly for configured agents without an enrolled recurring heartbeat now applies the maintenance check. Same 'maintenance_window' skip shape as the per-agent path.",
+    "cases": {
+      "inside_not_roster": 0,
+      "outside_not_roster": 1,
+      "inside_in_roster": 1
+    }
+  }
+}
