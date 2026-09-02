@@ -539,6 +539,40 @@ export function startHeartbeatRunner(opts: {
           };
         }
       }
+      // Closes cycle 6 [P1] "Gate targeted unscheduled heartbeat wakes":
+      // the maintenance check above is only evaluated when `targetAgent` is
+      // truthy, but the runOnce below can be reached for configured agents
+      // that have no enrolled recurring heartbeat (the `allowsUnscheduledTarget`
+      // branch above). Those non-manual wakes need the same role-isolation
+      // gate and retained-retry behavior as the per-agent path. The check
+      // resolves the maintenance window for the ambient agent id (the
+      // agent that the wake is targeting) and applies the same deferral.
+      if (allowsUnscheduledTarget || !targetAgent) {
+        const ambientAgentId =
+          targetAgent?.agentId ??
+          requestedTargetAgentId ??
+          resolveAmbientHeartbeatAgentId(wakeConfig);
+        const maintenance = wakeConfig.cron?.maintenance;
+        if (maintenance?.enabled) {
+          const phase = resolveMaintenancePhaseForCron({
+            maintenance,
+            userTimezone: wakeConfig.agents?.defaults?.userTimezone,
+            nowMs: now,
+            agentId: ambientAgentId,
+          });
+          if (phase.phase === "maintenance" && !phase.allowed) {
+            // Retained-retry behavior: report the skip with a
+            // `retryAtMs` set to the next phase change so the wake
+            // layer reschedules the wake to the moment the window
+            // closes. Matches the per-agent path above.
+            return {
+              status: "skipped",
+              reason: "maintenance_window",
+              retryAtMs: phase.nextPhaseChangeMs,
+            };
+          }
+        }
+      }
       try {
         const res = await runOnce({
           cfg: wakeConfig,

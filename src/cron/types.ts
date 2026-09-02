@@ -368,10 +368,46 @@ export type CronJobState = {
    */
   scheduleActivatedAtMs?: number;
   // Maintenance-window diagnostics (read-only; produced by the gateway's
-  // maintenance policy). Cleared on phase exit by the drain path.
+  // maintenance policy).
+  //
+  // `deferredMaintenanceCount` and the two timestamp fields are
+  // cumulative across phase exits — the count is incremented by 1 each
+  // time the maintenance phase exits while this job is held, and the
+  // timestamps record the most recent hold's wall-clock range. They
+  // are NOT cleared on phase exit; an external observer can read the
+  // historical record.
   deferredMaintenanceCount?: number;
   firstDeferredMaintenanceAtMs?: number | null;
   lastDeferredMaintenanceAtMs?: number | null;
+  /**
+   * Reason string for the most recent deferral. Stable closed enum;
+   * external monitors use this to distinguish "deferred by policy"
+   * (the maintenance window or another admission gate is holding the
+   * job) from "silently dead" (the schedule has gone stale and no
+   * longer fires). Without this field the two states look identical
+   * in the timestamp-only protocol.
+   */
+  lastDeferralReason?:
+    | "maintenance_window"
+    | "manual_run_blocked"
+    | "agent_role_mismatch"
+    | "scheduler_backoff";
+  /**
+   * Estimated number of schedule ticks the job missed while held by
+   * the most recent maintenance window. Computed at phase exit as
+   * `floor((lastDeferredAtMs - firstDeferredAtMs) / schedule_everyMs)
+   * + 1`, capped to a sane upper bound. For cron-syntax schedules
+   * (no fixed `everyMs`) the value is conservative and
+   * `missedScheduleTicksEstimateIsApproximate` is set to `true` to
+   * flag it.
+   *
+   * Distinct from `deferredMaintenanceCount`, which records how many
+   * *phase-exit hold events* hit this job (cumulative across the
+   * job's lifetime). `missedScheduleTicksEstimate` records how much
+   * *work was owed* in the most recent hold.
+   */
+  missedScheduleTicksEstimate?: number;
+  missedScheduleTicksEstimateIsApproximate?: boolean;
   /**
    * Transient replay priority: set by the phase-exit mirror to the
    * `lastDeferredAtMs` of the held entry, then cleared after the

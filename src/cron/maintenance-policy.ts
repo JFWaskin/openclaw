@@ -563,6 +563,23 @@ export async function reconcileMaintenancePhaseTransition(
           job.state.deferredMaintenanceCount = (job.state.deferredMaintenanceCount ?? 0) + 1;
           job.state.firstDeferredMaintenanceAtMs = entry.firstDeferredAtMs;
           job.state.lastDeferredMaintenanceAtMs = entry.lastDeferredAtMs;
+          // Closed-enum reason so external monitors can distinguish
+          // "deferred by maintenance policy" from "silently dead" (a
+          // schedule that has gone stale and no longer fires). The
+          // timestamp-only protocol cannot tell the two apart without
+          // this field — every deferral reason is recorded here.
+          job.state.lastDeferralReason = "maintenance_window";
+          // Estimated number of schedule ticks owed while this job was
+          // held. For `{kind: "every"}` schedules we can compute an
+          // exact estimate; for cron-syntax or event-driven schedules
+          // we fall back to a conservative ballpark and flag it. This
+          // is what an external monitor actually wants when it asks
+          // "did 12 ticks get skipped?".
+          const estimate = estimateMissedScheduleTicks(job.schedule, entry);
+          if (estimate !== undefined) {
+            job.state.missedScheduleTicksEstimate = estimate.count;
+            job.state.missedScheduleTicksEstimateIsApproximate = estimate.approximate;
+          }
           // Transient replay priority: the collector uses this field
           // (NOT the persistent `lastDeferredMaintenanceAtMs`) for the
           // FIFO replay sort. The field is cleared after the deferred
@@ -580,7 +597,12 @@ export async function reconcileMaintenancePhaseTransition(
           }
         }
       }
-      clearMaintenanceDeferrals();
+      // Note: do NOT clear the deferred queue here. The queue is
+      // cleared AFTER the durable save succeeds (see below) so a save
+      // failure can be retried from the in-memory queue rather than
+      // relying on the on-disk snapshot to be authoritative. Closes
+      // cycle 6 [P1] "Clear deferred work only after its durable save
+      // succeeds".
     }
     // undefined -> normal: no-op (no bump, no drain). The first tick just
     // records the current phase.
@@ -595,22 +617,99 @@ export async function reconcileMaintenancePhaseTransition(
   // would re-read the on-disk snapshot, lose the in-memory mutations,
   // and the deferred jobs would never be replayed. The cron store is
   // authoritative across reloads.
-  if (drainedCount > 0 && state.store && state.deps.storePath) {
-    try {
-      await saveCronStore(state.deps.storePath, state.store);
-    } catch (err) {
-      // Persist failure is non-fatal for the in-memory state: the
-      // scheduler still has the mutations in `state.store.jobs` and the
-      // diagnostics are already applied. A future force-reload may
-      // re-load the pre-replay snapshot, but the queue is already
-      // cleared and the diagnostics are recorded for the cycle. Log
-      // and continue.
-      state.deps.log.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        "cron: maintenance phase-exit persist failed; in-memory state retained",
-      );
+  //
+  // Closes cycle 6 [P1] "Clear deferred work only after its durable save
+  // succeeds" by ordering the save FIRST and the queue clear SECOND.
+  // On save failure, the in-memory queue is retained and a future tick
+  // can re-attempt the drain; on save success, the queue is cleared.
+  if (drainedCount > 0 && previous === "maintenance") {
+    if (state.store && state.deps.storePath) {
+      let saveSucceeded = false;
+      try {
+        await saveCronStore(state.deps.storePath, state.store);
+        saveSucceeded = true;
+      } catch (err) {
+        // Persist failure is non-fatal for the in-memory state: the
+        // scheduler still has the mutations in `state.store.jobs` and the
+        // diagnostics are already applied. A future force-reload may
+        // re-load the pre-replay snapshot, but the queue is still
+        // populated so the next reconciliation tick can re-mirror. Log
+        // and continue.
+        state.deps.log.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          "cron: maintenance phase-exit persist failed; in-memory state retained, queue NOT cleared",
+        );
+      }
+      if (saveSucceeded) {
+        // Save succeeded — the on-disk snapshot is now the
+        // authoritative record of the replay anchors and per-job
+        // diagnostics. The in-memory queue is no longer the source of
+        // truth and can be cleared.
+        clearMaintenanceDeferrals();
+      }
+    } else {
+      // No durable store — in-memory only. The in-memory queue is the
+      // only copy and is no longer the source of truth once the
+      // job.state mutations are applied above. Clear it.
+      clearMaintenanceDeferrals();
     }
   }
 
   return { previous, current, drainedCount, phaseBegan };
+}
+
+/**
+ * Estimate how many schedule ticks the job missed while held by the
+ * maintenance window. Returns `undefined` if the schedule is event-driven
+ * (no time axis) and no conservative estimate is possible.
+ *
+ * Semantic: "missed" = number of due slots in the *open interval*
+ * `(firstDeferredAtMs, lastDeferredAtMs]`. We do NOT count
+ * `firstDeferredAtMs` itself (the firstDeferred tick gets replayed
+ * alongside the rest, not counted as an extra missed slot), but we do
+ * count any later tick. The minimum is 1 — a hold of any length
+ * means at least the first due slot was missed.
+ *
+ *   - `{kind: "every"}` schedules: exact — `max(1, floor(holdMs / everyMs))`.
+ *     For a 3-hour hold on a 15-minute job this returns 12: the 12
+ *     due slots after `firstDeferredAtMs`.
+ *   - `{kind: "cron"}` schedules: conservative — `max(1,
+ *     floor(holdMs / 60_000))` (one tick per minute is the most-frequent
+ *     realistic cron interval). Marked approximate.
+ *   - `{kind: "at"}` one-shots: the held entry covers the one tick
+ *     that was due. Default to 1, marked approximate.
+ *   - `{kind: "on-exit"}` / `{kind: "stream"}` event-driven: undefined
+ *     — no time axis means "missed ticks" is meaningless.
+ */
+function estimateMissedScheduleTicks(
+  schedule: import("./types.js").CronSchedule,
+  entry: { firstDeferredAtMs: number; lastDeferredAtMs: number },
+): { count: number; approximate: boolean } | undefined {
+  const holdMs = Math.max(0, entry.lastDeferredAtMs - entry.firstDeferredAtMs);
+  switch (schedule.kind) {
+    case "every": {
+      const everyMs = Math.max(1, schedule.everyMs);
+      const count = Math.max(1, Math.floor(holdMs / everyMs));
+      return { count, approximate: false };
+    }
+    case "cron": {
+      // Conservative: a cron job fires at most once per minute. The
+      // estimate is `max(1, floor(holdMs / 60s))` so a 3-hour hold on a
+      // 15-minute cron job reports ~12 missed ticks.
+      const count = Math.max(1, Math.floor(holdMs / 60_000));
+      return { count, approximate: true };
+    }
+    case "at": {
+      // One-shot at a specific instant. The held entry either covers
+      // that instant (count = 1) or the job was deferred after the
+      // instant already passed (count = 0 — the job was missed).
+      // We can't tell from the held entry alone, so default to 1 and
+      // mark approximate so an external monitor can refine.
+      return { count: 1, approximate: true };
+    }
+    case "on-exit":
+    case "stream":
+    default:
+      return undefined;
+  }
 }

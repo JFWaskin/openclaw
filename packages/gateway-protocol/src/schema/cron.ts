@@ -486,9 +486,15 @@ export const CronJobStateSchema = closedObject({
   streamLastStartedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastExitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   // Maintenance-window diagnostics. Reported read-only; not patchable.
-  // Cleared on phase exit by the gateway's drain path. The fields are
-  // nullable so the absence of a value (cron job has never been deferred)
-  // is distinguishable from a zero count.
+  //
+  // `deferredMaintenanceCount` and the two timestamp fields are
+  // *cumulative across phase exits*: the count is incremented by 1 each
+  // time the maintenance phase exits while this job is held, and the
+  // timestamps are the wall-clock range across the most recent hold.
+  // They are NOT cleared on phase exit — an external observer can read
+  // the historical record. The fields are nullable so the absence of a
+  // value (the job has never been deferred) is distinguishable from a
+  // zero count.
   deferredMaintenanceCount: Type.Optional(Type.Integer({ minimum: 0 })),
   firstDeferredMaintenanceAtMs: Type.Optional(
     Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
@@ -496,10 +502,46 @@ export const CronJobStateSchema = closedObject({
   lastDeferredMaintenanceAtMs: Type.Optional(
     Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   ),
+  // Reason string for the most recent deferral. External monitors use
+  // this to distinguish "deferred by policy" (the job is being held by
+  // the maintenance window or another admission gate) from "silently
+  // dead" (the schedule has gone stale and no longer fires). Without
+  // this field the two states look identical in the timestamp-only
+  // protocol. Closed enum so the operator surface is stable; renames
+  // need a protocol-bump and an explicit deprecation cycle.
+  lastDeferralReason: Type.Optional(
+    Type.Union([
+      Type.Literal("maintenance_window"),
+      Type.Literal("manual_run_blocked"),
+      Type.Literal("agent_role_mismatch"),
+      Type.Literal("scheduler_backoff"),
+    ]),
+  ),
+  // Estimated number of schedule ticks the job missed while held by
+  // the most recent maintenance window. Computed at phase exit as
+  // `floor((lastDeferredAtMs - firstDeferredAtMs) / schedule_everyMs)
+  // + 1`, capped to a sane upper bound so a job held for 30 days
+  // doesn't overflow. For cron-syntax schedules (no fixed `everyMs`),
+  // this is a conservative ballpark and the value is marked with
+  // `missedScheduleTicksEstimateIsApproximate: true` to flag it.
+  //
+  // Distinct from `deferredMaintenanceCount`, which records how many
+  // *phase-exit hold events* hit this job (cumulative across the job's
+  // lifetime). `missedScheduleTicksEstimate` records how much *work
+  // was owed* in the most recent hold — what an external monitor
+  // actually wants when it asks "did 12 ticks get skipped?".
+  missedScheduleTicksEstimate: Type.Optional(Type.Integer({ minimum: 0 })),
+  missedScheduleTicksEstimateIsApproximate: Type.Optional(Type.Boolean()),
   // Transient replay priority: set by the phase-exit mirror and cleared
   // after the deferred job is admitted. Reported for diagnostics; not
   // patchable. Distinct from the historical `lastDeferredMaintenanceAtMs`
   // which persists across the job's lifetime.
+  //
+  // Privacy: this field exposes scheduler-internal state through the
+  // public protocol. It is gated behind the existing maintenance
+  // config so the field is absent when maintenance is disabled, but
+  // for sites where scheduler internals are considered sensitive,
+  // operators can clear it by setting `cron.maintenance.enabled=false`.
   pendingMaintenanceReplayAtMs: Type.Optional(
     Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   ),

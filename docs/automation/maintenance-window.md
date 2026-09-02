@@ -126,12 +126,33 @@ The maintenance block is surfaced in `cron.status` JSON:
 
 The protocol-level `CronJobState` also exposes per-job additive diagnostics:
 
-- `deferredMaintenanceCount`: how many times this job was blocked by the
-  current phase.
+- `deferredMaintenanceCount`: cumulative number of phase-exit hold events
+  that affected this job across its lifetime. Incremented by 1 each
+  time the maintenance phase exits while this job is still in the
+  deferred queue. Distinct from "missed schedule ticks" (see
+  `missedScheduleTicksEstimate` below).
 - `firstDeferredMaintenanceAtMs` / `lastDeferredMaintenanceAtMs`: the
-  wall-clock range during which this job was held.
+  wall-clock range of the most recent hold. Both fields are updated on
+  every phase exit that held the job; an external monitor reading the
+  historical record sees the most recent hold, not the union of all
+  holds.
+- `lastDeferralReason`: closed enum (`"maintenance_window" |
+"manual_run_blocked" | "agent_role_mismatch" | "scheduler_backoff"`).
+  Lets an external monitor distinguish "deferred by policy" from
+  "silently dead" (a schedule that has gone stale and no longer fires)
+  — without this field the two states look identical in the
+  timestamp-only protocol.
+- `missedScheduleTicksEstimate` and
+  `missedScheduleTicksEstimateIsApproximate`: estimated number of
+  schedule ticks the job missed while held, computed at phase exit
+  from the held entry's wall-clock range and the job's schedule.
+  For `{kind: "every"}` schedules this is exact; for cron-syntax
+  schedules it is conservative and the approximate flag is set.
 
-These fields are read-only and are cleared when the phase exits.
+All of these fields are read-only and are **cumulative** across phase
+exits — they are NOT cleared when the phase exits. An external monitor
+reading the historical record will see the running totals; the
+absence of a value indicates the job has never been deferred.
 
 ## Caveats
 

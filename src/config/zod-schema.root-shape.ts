@@ -325,9 +325,18 @@ export const OpenClawSchemaShape = {
                 .string()
                 .regex(/^([01]\d|2[0-3]):[0-5]\d$/u, "use HH:MM (24h) format")
                 .optional(),
+              // `end` accepts the special "24:00" sentinel in addition to HH:MM
+              // 00:00–23:59. The resolver treats 24:00 as the end of the day
+              // (i.e., midnight of the next calendar date) so operators can
+              // pin a window to a same-day end. Schema-level acceptance here
+              // matches what `resolveMaintenancePhaseForCron` already
+              // supports; see `src/cron/maintenance-policy.ts`.
               end: z
                 .string()
-                .regex(/^([01]\d|2[0-3]):[0-5]\d$/u, "use HH:MM (24h) format")
+                .regex(
+                  /^([01]\d|2[0-3]):[0-5]\d$|^24:00$/u,
+                  "use HH:MM (24h) format; 24:00 allowed for end",
+                )
                 .optional(),
               timezone: z.string().min(1).optional(),
             })
@@ -338,7 +347,8 @@ export const OpenClawSchemaShape = {
         .superRefine((val, ctx) => {
           // When window is present, both start and end must be set, and start must
           // be strictly before end. Cross-midnight windows are out of scope for
-          // v2; reject with an explicit message so the operator sees the gap.
+          // v2 except via the `24:00` end-sentinel; reject with an explicit
+          // message so the operator sees the gap.
           if (val.window && (val.window.start === undefined || val.window.end === undefined)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -352,8 +362,33 @@ export const OpenClawSchemaShape = {
               code: z.ZodIssueCode.custom,
               path: ["window"],
               message:
-                "maintenance.window.start must be strictly before end; cross-midnight windows are not supported in this release",
+                "maintenance.window.start must be strictly before end; cross-midnight windows are not supported in this release (use end=24:00 for same-day close-of-day)",
             });
+          }
+          // Validate `timezone` against the host's IANA database. Without
+          // this gate, `Intl.DateTimeFormat` silently falls back to the
+          // operator's local zone for invalid names, so a typo would defer
+          // cron/heartbeat work at a different daily interval than the one
+          // the operator configured. Reject at config-load time so the
+          // mismatch is visible up front.
+          if (val.window?.timezone) {
+            const tz = val.window.timezone.trim();
+            // `user` and `local` are operator-facing aliases that the
+            // resolver already understands. Anything else must be a real
+            // IANA zone that `Intl.DateTimeFormat` can resolve.
+            if (tz !== "user" && tz !== "local") {
+              try {
+                // Probe with a sample instant; `Intl` throws RangeError on
+                // an unknown zone identifier.
+                new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date(0));
+              } catch {
+                ctx.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  path: ["window", "timezone"],
+                  message: `unknown IANA timezone "${tz}"`,
+                });
+              }
+            }
           }
         })
         .optional(),

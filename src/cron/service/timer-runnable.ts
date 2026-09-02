@@ -80,6 +80,15 @@ export function shouldDeferJobToMaintenance(
   });
   if (phase.phase === "maintenance" && !phase.allowed) {
     recordMaintenanceDeferral({ jobId: job.id, agentId, nowMs });
+    // Mirror the reason onto the job's persisted state immediately so an
+    // external monitor can read `lastDeferralReason` during the hold,
+    // not just after the phase exits. The phase-exit mirror in
+    // `reconcileMaintenancePhaseTransition` will overwrite this with the
+    // same value, so there's no double-write hazard.
+    if (!job.state) {
+      job.state = {};
+    }
+    job.state.lastDeferralReason = "maintenance_window";
     return true;
   }
   return false;
