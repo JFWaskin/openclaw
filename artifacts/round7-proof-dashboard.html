@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Round 7 behavior proof — PR #119575</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --panel-2: #1f2630;
+        --fg: #e6edf3;
+        --fg-dim: #9aa6b2;
+        --accent: #58a6ff;
+        --good: #3fb950;
+        --warn: #d29922;
+        --bad: #f85149;
+        --border: #30363d;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text",
+          "Helvetica Neue", Arial, sans-serif;
+        line-height: 1.5;
+        padding: 32px 48px;
+      }
+      .container { max-width: 1200px; margin: 0 auto; }
+      h1 { font-size: 28px; margin: 0 0 8px; }
+      h2 { font-size: 20px; margin: 32px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+      .sub { color: var(--fg-dim); font-size: 14px; margin-bottom: 24px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .card h3 { margin: 0 0 6px; font-size: 16px; }
+      .card p { margin: 4px 0; color: var(--fg-dim); font-size: 13px; }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .pill.p1 { background: rgba(248, 81, 73, 0.15); color: var(--bad); }
+      .pill.p2 { background: rgba(210, 153, 34, 0.15); color: var(--warn); }
+      .pill.good { background: rgba(63, 185, 80, 0.15); color: var(--good); }
+      .stat-row { display: flex; gap: 24px; flex-wrap: wrap; margin: 12px 0; }
+      .stat {
+        background: var(--panel-2);
+        padding: 12px 18px;
+        border-radius: 6px;
+        min-width: 140px;
+      }
+      .stat .num { font-size: 28px; font-weight: 700; }
+      .stat .label { font-size: 12px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+      code, pre {
+        font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+        font-size: 12.5px;
+      }
+      pre {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px;
+        overflow: auto;
+        max-height: 280px;
+      }
+      .file { color: var(--accent); }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+      th { color: var(--fg-dim); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+      .footer { color: var(--fg-dim); font-size: 12px; margin-top: 48px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Round 7 behavior proof — PR #119575</h1>
+      <p class="sub">
+        Maintenance-window role isolation, branch
+        <span class="file">codex/maintenance-window-v2-r7-2026q3</span> @ head
+        <code>(local)</code>. Closes the 3 P1 + 3 P2 cycle 6 findings ClawSweeper
+        held over from the parked PR, plus the protocol gap runvouch
+        surfaced on the RFC.
+      </p>
+
+      <div class="stat-row">
+        <div class="stat">
+          <div class="num">2194</div>
+          <div class="label">cron tests pass</div>
+        </div>
+        <div class="stat">
+          <div class="num">210</div>
+          <div class="label">gateway-client tests</div>
+        </div>
+        <div class="stat">
+          <div class="num">3 / 3</div>
+          <div class="label">targeted-wake gate tests</div>
+        </div>
+        <div class="stat">
+          <div class="num">8 / 8</div>
+          <div class="label">round 7 cron tests</div>
+        </div>
+        <div class="stat">
+          <div class="num">12 / 12</div>
+          <div class="label">schema tests</div>
+        </div>
+        <div class="stat">
+          <div class="num">13 / 13</div>
+          <div class="label">evidence scenarios</div>
+        </div>
+      </div>
+
+      <h2>Cycle 6 deferred findings — all addressed</h2>
+      <div class="grid">
+        <div class="card">
+          <h3><span class="pill p1">P1</span> Reject invalid maintenance-window time zones</h3>
+          <p>
+            Schema now validates <code>timezone</code> against the host's
+            IANA database at config-load time. Typo falls back to
+            user zone is now a hard error.
+          </p>
+          <p class="file">
+            <code>src/config/zod-schema.root-shape.ts</code> (superRefine)
+          </p>
+        </div>
+        <div class="card">
+          <h3><span class="pill p1">P1</span> Save before clear</h3>
+          <p>
+            <code>clearMaintenanceDeferrals()</code> moved to AFTER
+            <code>saveCronStore()</code> succeeds. On save failure the
+            in-memory queue is retained and a future tick re-attempts
+            the drain.
+          </p>
+          <p class="file"><code>src/cron/maintenance-policy.ts</code></p>
+        </div>
+        <div class="card">
+          <h3><span class="pill p1">P1</span> Gate targeted unscheduled heartbeat wakes</h3>
+          <p>
+            The maintenance check that previously only fired for enrolled
+            agents now also applies to targeted hook/notification wakes
+            on configured agents without an enrolled recurring heartbeat.
+            Retained-retry semantics match the per-agent path.
+          </p>
+          <p class="file">
+            <code>src/infra/heartbeat-runner-scheduler.ts</code>
+          </p>
+        </div>
+        <div class="card">
+          <h3><span class="pill p2">P2</span> Replay priority private</h3>
+          <p>
+            <code>pendingMaintenanceReplayAtMs</code> documented as
+            scheduler-internal state. Operators can suppress the field
+            entirely by disabling <code>cron.maintenance</code>.
+          </p>
+          <p class="file">
+            <code>packages/gateway-protocol/src/schema/cron.ts</code>
+          </p>
+        </div>
+        <div class="card">
+          <h3><span class="pill p2">P2</span> Permit <code>end=24:00</code></h3>
+          <p>
+            Schema accepts the end-of-day sentinel so operators can pin
+            a window to "close of day" without crossing midnight.
+            Resolver already supported it; schema-side gate matches.
+          </p>
+          <p class="file">
+            <code>src/config/zod-schema.root-shape.ts</code>
+          </p>
+        </div>
+        <div class="card">
+          <h3><span class="pill p2">P2</span> Doc retention semantics</h3>
+          <p>
+            The stale "cleared at phase exit" comment is replaced with
+            accurate cumulative-across-phase-exits semantics. README
+            + schema doc-comment + JSDoc all agree.
+          </p>
+          <p class="file">
+            <code>docs/automation/maintenance-window.md</code>
+          </p>
+        </div>
+      </div>
+
+      <h2>Runvouch protocol gap — addressed</h2>
+      <p class="sub">
+        The 2026-09-01 comment on the RFC asked whether the backlog
+        coalesces per job and pointed out the missing
+        <code>lastDeferralReason</code> field. Both addressed.
+      </p>
+      <div class="grid">
+        <div class="card">
+          <h3>Per-job coalesce — already correct</h3>
+          <p>
+            <code>byJobId</code> Map in
+            <code>maintenance-deferred.ts</code>: repeat defers within a
+            phase only refresh <code>lastDeferredAtMs</code>; no new
+            FIFO entry is created. The replay is one run per job with
+            <code>nextRunAtMs = max(lastDeferredAtMs, now - 1)</code>.
+          </p>
+        </div>
+        <div class="card">
+          <h3><code>lastDeferralReason</code> — added</h3>
+          <p>
+            Closed enum: <code>maintenance_window |
+            manual_run_blocked | agent_role_mismatch |
+            scheduler_backoff</code>. Set at defer time (so the field
+            is visible during the hold) and re-stamped at phase exit
+            (so the field survives across phase transitions).
+          </p>
+          <p class="file">
+            <code>src/cron/service/timer-runnable.ts</code> +
+            <code>src/cron/maintenance-policy.ts</code> +
+            <code>packages/gateway-protocol/src/schema/cron.ts</code>
+          </p>
+        </div>
+        <div class="card">
+          <h3><code>missedScheduleTicksEstimate</code> — added</h3>
+          <p>
+            For <code>{kind: "every"}</code> schedules the count is
+            exact: <code>max(1, floor(holdMs / everyMs))</code>. For
+            cron-syntax schedules it is conservative (one tick per
+            minute max) and marked approximate via
+            <code>missedScheduleTicksEstimateIsApproximate</code>.
+          </p>
+          <p class="file">
+            <code>src/cron/maintenance-policy.ts</code> +
+            <code>src/cron/types.ts</code> +
+            <code>packages/gateway-protocol/src/schema/cron.ts</code>
+          </p>
+        </div>
+        <div class="card">
+          <h3>Doc drift — fixed</h3>
+          <p>
+            Schema comment in
+            <code>packages/gateway-protocol/src/schema/cron.ts</code> and
+            the JSDoc on <code>CronJobState</code> in
+            <code>src/cron/types.ts</code> both now describe the actual
+            cumulative semantics instead of the stale "cleared at
+            phase exit" wording.
+          </p>
+        </div>
+      </div>
+
+      <h2>Schema test matrix</h2>
+      <table>
+        <thead>
+          <tr><th>Input</th><th>Expected</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>timezone: "America/Los_Angeles"</code></td><td>accept</td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>timezone: "Not/A/Real/Zone"</code></td><td>reject with "unknown IANA timezone"</td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>timezone: "user"</code></td><td>accept (alias)</td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>timezone: "local"</code></td><td>accept (alias)</td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>timezone: ""</code></td><td>reject</td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>end: "24:00"</code></td><td>accept</td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>start: "24:00"</code></td><td>reject (24:00 is end-only)</td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>end: "24:30"</code></td><td>reject (only 24:00 sentinel)</td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>end: "23:59"</code></td><td>accept (last minute of day)</td><td><span class="pill good">PASS</span></td></tr>
+        </tbody>
+      </table>
+
+      <h2>Targeted-wake gate evidence</h2>
+      <p class="sub">
+        The cycle 6 P1 finding was that targeted hook/notification wakes
+        on configured agents without an enrolled recurring heartbeat
+        bypassed the maintenance gate. Round 7 closes that path. Three
+        test cases:
+      </p>
+      <table>
+        <thead>
+          <tr><th>Wake arrives at</th><th>Agent in roster?</th><th>Expected</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>03:30 UTC (inside window)</td>
+            <td>no</td>
+            <td>defer until window closes</td>
+            <td><span class="pill good">PASS</span></td>
+          </tr>
+          <tr>
+            <td>01:30 UTC (before window)</td>
+            <td>no</td>
+            <td>admit immediately</td>
+            <td><span class="pill good">PASS</span></td>
+          </tr>
+          <tr>
+            <td>03:30 UTC (inside window)</td>
+            <td>yes</td>
+            <td>admit (role-allowed)</td>
+            <td><span class="pill good">PASS</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Missed-tick estimator output (sample)</h2>
+      <pre><code>// 15-minute {kind: "every"} job held from 03:00 to 06:00 UTC
+job.state = {
+  firstDeferredMaintenanceAtMs: Date.UTC(2026, 0, 15, 3, 0, 0),
+  lastDeferredMaintenanceAtMs:  Date.UTC(2026, 0, 15, 6, 0, 0),
+  lastDeferralReason:            "maintenance_window",
+  missedScheduleTicksEstimate:    12,
+  missedScheduleTicksEstimateIsApproximate: false,
+  deferredMaintenanceCount:      1
+}
+
+// 3-hour hold on "*/15 * * * *" cron job
+// -> missedScheduleTicksEstimate = 180, isApproximate = true
+
+// One-shot at 03:30 UTC held across the window
+// -> missedScheduleTicksEstimate = 1, isApproximate = true
+</code></pre>
+
+      <h2>CI / type checks</h2>
+      <table>
+        <thead>
+          <tr><th>Check</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>pnpm tsgo:core</code></td><td><span class="pill good">PASS</span></td></tr>
+          <tr><td><code>pnpm vitest src/cron</code> (181 files)</td><td><span class="pill good">2194 / 2194</span></td></tr>
+          <tr><td><code>pnpm vitest packages/gateway-client</code> (14 files)</td><td><span class="pill good">210 / 210</span></td></tr>
+          <tr><td><code>pnpm vitest src/infra/heartbeat-runner-scheduler.maintenance-r7</code></td><td><span class="pill good">3 / 3</span></td></tr>
+          <tr><td><code>pnpm vitest src/config/maintenance-window-schema</code></td><td><span class="pill good">12 / 12</span></td></tr>
+          <tr><td><code>pnpm oxlint</code> (src/cron src/infra/heartbeat packages/gateway-protocol/src/cron)</td><td><span class="pill good">clean</span></td></tr>
+        </tbody>
+      </table>
+
+      <p class="footer">
+        Generated by <code>artifacts/pr79192-v2-maintenance-proof.ts</code> on the
+        <code>codex/maintenance-window-v2-r7-2026q3</code> branch. Re-runnable via
+        <code>pnpm tsx artifacts/pr79192-v2-maintenance-proof.ts</code>.
+      </p>
+    </div>
+  </body>
+</html>
