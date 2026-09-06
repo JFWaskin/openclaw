@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenClaw · Maintenance Window · Live State</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#0e0e10; color:#e6e6e6; }
+  header { padding:18px 24px; background:linear-gradient(180deg,#18181b,#0e0e10); border-bottom:1px solid #2a2a2e; display:flex; gap:14px; align-items:center; }
+  header .logo { width:30px; height:30px; border-radius:8px; background:#ef4444; display:grid; place-items:center; font-weight:700; }
+  header h1 { font-size:16px; margin:0; }
+  header .sub { color:#8b8b95; font-size:12px; }
+  main { padding:24px; max-width:1280px; margin:0 auto; }
+  .banner { display:flex; align-items:center; gap:12px; padding:14px 18px; background:#3b1414; border:1px solid #ef4444; border-radius:10px; margin-bottom:18px; }
+  .banner .dot { width:10px; height:10px; border-radius:50%; background:#ef4444; box-shadow:0 0 0 4px rgba(239,68,68,0.18); }
+  .banner strong { color:#fda4af; }
+  .grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:18px; }
+  .card { background:#18181b; border:1px solid #2a2a2e; border-radius:10px; padding:14px 16px; }
+  .card .label { font-size:11px; color:#8b8b95; text-transform:uppercase; letter-spacing:0.5px; }
+  .card .value { font-size:24px; font-weight:600; margin-top:4px; }
+  .card.warn .value { color:#fda4af; }
+  .card.ok .value { color:#86efac; }
+  .jobs { background:#18181b; border:1px solid #2a2a2e; border-radius:10px; overflow:hidden; margin-bottom:18px; }
+  .jobs h2 { margin:0; padding:14px 18px; font-size:13px; text-transform:uppercase; color:#8b8b95; letter-spacing:0.5px; border-bottom:1px solid #2a2a2e; }
+  .row { display:grid; grid-template-columns: 32px 1fr 140px 140px 140px 100px; gap:12px; padding:14px 18px; align-items:center; border-bottom:1px solid #202024; }
+  .row:last-child { border-bottom:none; }
+  .row .icon { width:28px; height:28px; border-radius:8px; background:#27272a; display:grid; place-items:center; }
+  .row .name { font-weight:500; }
+  .row .meta { color:#8b8b95; font-size:12px; }
+  .row .badge { padding:3px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+  .badge-held { background:#3b1414; color:#fda4af; border:1px solid #ef4444; }
+  .badge-ok { background:#0e2e1c; color:#86efac; border:1px solid #16a34a; }
+  .badge-active { background:#1e1b4b; color:#a5b4fc; border:1px solid #4f46e5; }
+  .badge-paused { background:#27272a; color:#8b8b95; border:1px solid #3f3f46; }
+  pre { background:#0a0a0c; border:1px solid #2a2a2e; border-radius:8px; padding:14px 16px; margin:0; overflow:auto; font:12px/1.55 ui-monospace, SFMono-Regular, monospace; color:#d4d4d8; }
+  h3 { font-size:12px; text-transform:uppercase; color:#8b8b95; letter-spacing:0.5px; margin:18px 0 8px; }
+  .footer { color:#52525b; font-size:11px; padding:12px 24px; border-top:1px solid #2a2a2e; }
+  .icon-fire { color:#f97316; }
+  .icon-heart { color:#ec4899; }
+  .icon-brain { color:#a78bfa; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">🦀</div>
+  <div>
+    <h1>OpenClaw · Maintenance Window</h1>
+    <div class="sub">Live state from gateway ws://127.0.0.1:19001 (v2 dev profile) · OpenClaw 2026.7.2 (96ab193)</div>
+  </div>
+</header>
+<main>
+  <div class="banner">
+    <div class="dot"></div>
+    <div>
+      <strong>Maintenance window ACTIVE</strong> &nbsp;·&nbsp;
+      00:00–23:59 Asia/Shanghai &nbsp;·&nbsp;
+      <span id="phase">phase: maintenance</span> &nbsp;·&nbsp;
+      <span id="nextchange">next phase change: end-of-day 23:59</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card warn">
+      <div class="label">Active phase</div>
+      <div class="value" id="phase2">maintenance</div>
+    </div>
+    <div class="card warn">
+      <div class="label">Jobs deferred</div>
+      <div class="value" id="deferred">3</div>
+    </div>
+    <div class="card">
+      <div class="label">Total jobs</div>
+      <div class="value" id="total">3</div>
+    </div>
+    <div class="card ok">
+      <div class="label">allowManualRun</div>
+      <div class="value" id="manual">true</div>
+    </div>
+  </div>
+
+  <div class="jobs">
+    <h2>Automations · deferred state</h2>
+    <div class="row" style="background:#202024;">
+      <div></div>
+      <div class="meta" style="color:#8b8b95;">NAME</div>
+      <div class="meta" style="color:#8b8b95;">SCHEDULE</div>
+      <div class="meta" style="color:#8b8b95;">NEXT RUN</div>
+      <div class="meta" style="color:#8b8b95;">LAST DEFERRED</div>
+      <div class="meta" style="color:#8b8b95;">REASON</div>
+    </div>
+
+    <div class="row">
+      <div class="icon"><span class="icon-brain">🧠</span></div>
+      <div>
+        <div class="name">Memory Dreaming Promotion</div>
+        <div class="meta">[managed-by=memory-core.short-term-promotion] Promote weighted short-term recalls into MEMORY.md (limit=10, minScore=0.750, minRecallCount=3, minUniqueQueries=3, recencyHalfLifeDays=14, maxAgeDays=30)</div>
+      </div>
+      <div>cron 0 3 * * *</div>
+      <div>overdue · 4m ago</div>
+      <div>4m ago</div>
+      <div><span class="badge badge-held">HELD</span></div>
+    </div>
+
+    <div class="row">
+      <div class="icon"><span class="icon-fire">🔥</span></div>
+      <div>
+        <div class="name">Heartbeat probe</div>
+        <div class="meta">echo maintenance-window-demo-tick (manual-run allowed → runs even during window)</div>
+      </div>
+      <div>every 5m</div>
+      <div>overdue · 8m ago</div>
+      <div>4m ago</div>
+      <div><span class="badge badge-held">HELD</span></div>
+    </div>
+
+    <div class="row">
+      <div class="icon"><span class="icon-heart">💓</span></div>
+      <div>
+        <div class="name">heartbeat-dev</div>
+        <div class="meta">managed by heartbeat runner; uses maintenance-aware wake gate (round 7)</div>
+      </div>
+      <div>every 30m</div>
+      <div>overdue · 2m ago</div>
+      <div>4m ago</div>
+      <div><span class="badge badge-held">HELD</span></div>
+    </div>
+  </div>
+
+  <h3>Gateway status (live `openclaw cron status`)</h3>
+  <pre id="status">{
+  "enabled": true,
+  "maintenance": {
+    "enabled": true,
+    "phase": "maintenance",
+    "window": { "start": "00:00", "end": "23:59", "timezone": "Asia/Shanghai" },
+    "allowManualRun": true,
+    "deferredCount": 3,
+    "deferredBacklog": [
+      { "jobId": "3788608a-...", "agentId": "dev", "phaseId": "phase-1-..." },
+      { "jobId": "eb694a8a-...", "agentId": "dev", "phaseId": "phase-1-..." },
+      { "jobId": "38efc8db-...", "agentId": "dev", "phaseId": "phase-1-..." }
+    ]
+  }
+}</pre>
+
+  <h3>Per-job lastDeferralReason (round 7 protocol field)</h3>
+  <pre>{
+  "3788608a-...-Memory Dreaming Promotion":   { "lastDeferralReason": "maintenance_window" },
+  "eb694a8a-...-Heartbeat probe":             { "lastDeferralReason": "maintenance_window" },
+  "38efc8db-...-heartbeat-dev":               { "lastDeferralReason": "maintenance_window" }
+}</pre>
+
+  <h3>What changes at phase exit (23:59 Asia/Shanghai)</h3>
+  <pre>on phase exit, each held job's state gets stamped with:
+  - missedScheduleTicksEstimate    (exact for every; 1/min for cron; 1 for at)
+  - missedScheduleTicksEstimateIsApproximate = true  (for cron/at)
+  - lastDeferredAtMs re-stamped to now()
+  - lastDeferralReason re-stamped to current reason
+
+Held job re-admits with retryAtMs = original nextRunAtMs (no drift)
+Save-before-clear ordering: deferral queue is NOT cleared until
+  saveCronStore() returns success — retry-on-fail keeps the backlog.</pre>
+</main>
+<div class="footer">Snapshot taken Thu Sep 3 2026 15:39 GMT+8 · Real v2 gateway ws://127.0.0.1:19001 · Real Control UI http://127.0.0.1:5199</div>
+</body>
+</html>

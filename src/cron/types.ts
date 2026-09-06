@@ -409,6 +409,31 @@ export type CronJobState = {
   missedScheduleTicksEstimate?: number;
   missedScheduleTicksEstimateIsApproximate?: boolean;
   /**
+   * Number of schedule ticks that were intentionally coalesced (skipped
+   * without replay) during the most recent maintenance window. Equals
+   * `missedScheduleTicksEstimate - 1` when the job was replayed at phase
+   * exit (the canonical "one run per job, latest schedule wins" path),
+   * or `missedScheduleTicksEstimate` when the held job's schedule is
+   * already past (e.g. an `at` job that fired before the window opened
+   * or whose target time fell inside the window and was not replayed).
+   *
+   * Distinct from `deferredMaintenanceCount` (lifetime hold-event count)
+   * and `missedScheduleTicksEstimate` (estimated work owed in the most
+   * recent hold). External monitors use this field directly to answer
+   * "how many runs were intentionally suppressed?" without re-doing the
+   * arithmetic on `lastRunAtMs`.
+   *
+   * Coalescing policy: when the maintenance phase exits, each held job
+   * is replayed at most once. The held queue is deduped (one entry per
+   * job per phase), and the replay anchor is set to `lastDeferredAtMs`
+   * so the next scheduler tick admits the job through the normal
+   * admission path. Periodic jobs with a fixed `everyMs` therefore
+   * replay exactly one tick per held entry, no matter how many schedule
+   * slots fell inside the window. See `src/cron/maintenance-policy.ts`
+   * (the `previous === "maintenance"` branch of `applyMaintenancePhase`).
+   */
+  lastMaintenanceCoalescedCount?: number;
+  /**
    * Transient replay priority: set by the phase-exit mirror to the
    * `lastDeferredAtMs` of the held entry, then cleared after the
    * deferred job is admitted. The collector sorts admitted jobs by

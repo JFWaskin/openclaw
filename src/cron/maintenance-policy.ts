@@ -523,8 +523,11 @@ export async function reconcileMaintenancePhaseTransition(
   if (previous !== current) {
     if (current === "maintenance") {
       // normal (or undefined) -> maintenance: bump the phase id so subsequent
-      // deferrals bind to the new window.
+      // deferrals bind to the new window, and record the wall-clock instant
+      // the phase began. The phase-exit reconciler uses this to compute the
+      // actual hold duration for each held job.
       beginMaintenancePhase(nowMs);
+      state.maintenancePhaseEnteredAtMs = nowMs;
       phaseBegan = true;
     } else if (previous === "maintenance") {
       // maintenance -> normal: replay the held-backlog in FIFO order.
@@ -575,10 +578,51 @@ export async function reconcileMaintenancePhaseTransition(
           // we fall back to a conservative ballpark and flag it. This
           // is what an external monitor actually wants when it asks
           // "did 12 ticks get skipped?".
-          const estimate = estimateMissedScheduleTicks(job.schedule, entry);
+          //
+          // The hold duration is the intersection of the maintenance
+          // window and the job's deferral history. We use the larger of
+          // (entry.lastDeferredAtMs - entry.firstDeferredAtMs) and
+          // (nowMs - state.maintenancePhaseEnteredAtMs) so a job
+          // deferred once at the start of a 3-hour window reports the
+          // full 3 hours, not 0. The `phaseEnteredAtMs` field is
+          // recorded when the phase begins and cleared when it exits
+          // (see the `previous === "maintenance"` branch above).
+          const phaseEnteredAtMs = state.maintenancePhaseEnteredAtMs;
+          const holdMs = Math.max(
+            0,
+            entry.lastDeferredAtMs - entry.firstDeferredAtMs,
+            phaseEnteredAtMs !== null && phaseEnteredAtMs !== undefined
+              ? nowMs - phaseEnteredAtMs
+              : 0,
+          );
+          const estimate = estimateMissedScheduleTicks(job.schedule, holdMs);
           if (estimate !== undefined) {
             job.state.missedScheduleTicksEstimate = estimate.count;
             job.state.missedScheduleTicksEstimateIsApproximate = estimate.approximate;
+            // Coalesced count: how many of the missed ticks were
+            // intentionally suppressed without replay. The held queue
+            // is deduped (one entry per job per phase) and the replay
+            // anchor below is `lastDeferredAtMs`, so a held job is
+            // admitted exactly once at phase exit. Therefore:
+            //   coalesced = max(0, estimate.count - 1) for periodic
+            //               jobs whose schedule fires repeatedly
+            //               (the replay absorbs one of the owed slots)
+            //   coalesced = 0 for `at` jobs (the estimate is 1, the
+            //               replay either runs the at-once or
+            //               supersedes the missed target instant;
+            //               either way one slot is consumed by the
+            //               replay and the rest were never owed
+            //               because `at` only fires once)
+            //
+            // The `at`-is-always-1 case is why `estimate.count - 1`
+            // is safe: for `at` schedules the estimate is 1 (one owed
+            // slot), the replay consumes that slot, and the
+            // coalesced count is 0 — matching the fact that the
+            // replay covered the only owed work.
+            //
+            // See `src/cron/maintenance-coalescing.test.ts` for the
+            // tri-fold coverage (functional, edge, regression).
+            job.state.lastMaintenanceCoalescedCount = Math.max(0, estimate.count - 1);
           }
           // Transient replay priority: the collector uses this field
           // (NOT the persistent `lastDeferredMaintenanceAtMs`) for the
@@ -609,6 +653,13 @@ export async function reconcileMaintenancePhaseTransition(
   }
 
   state.lastMaintenancePhase = current;
+  // Clear the phase-entered sentinel so a stale value cannot leak into
+  // the next maintenance phase. Set again on the next normal ->
+  // maintenance transition (the `current === "maintenance"` branch
+  // above).
+  if (previous === "maintenance" && current === "normal") {
+    state.maintenancePhaseEnteredAtMs = null;
+  }
 
   // ClawSweeper cycle 5d [P1] "Persist phase-exit replay before clearing
   // its queue": the replay-anchor writes and the per-job diagnostics must
@@ -659,20 +710,18 @@ export async function reconcileMaintenancePhaseTransition(
 }
 
 /**
- * Estimate how many schedule ticks the job missed while held by the
- * maintenance window. Returns `undefined` if the schedule is event-driven
- * (no time axis) and no conservative estimate is possible.
+ * Estimate how many schedule ticks the job missed during a hold of
+ * `holdMs` milliseconds. Returns `undefined` if the schedule is
+ * event-driven (no time axis) and no conservative estimate is
+ * possible.
  *
- * Semantic: "missed" = number of due slots in the *open interval*
- * `(firstDeferredAtMs, lastDeferredAtMs]`. We do NOT count
- * `firstDeferredAtMs` itself (the firstDeferred tick gets replayed
- * alongside the rest, not counted as an extra missed slot), but we do
- * count any later tick. The minimum is 1 — a hold of any length
+ * Semantic: "missed" = number of due slots in the open interval
+ * covering the hold. The minimum is 1 — a hold of any length
  * means at least the first due slot was missed.
  *
  *   - `{kind: "every"}` schedules: exact — `max(1, floor(holdMs / everyMs))`.
- *     For a 3-hour hold on a 15-minute job this returns 12: the 12
- *     due slots after `firstDeferredAtMs`.
+ *     For a 2-hour hold on a 15-minute job this returns 8: the 8 due
+ *     slots within the hold.
  *   - `{kind: "cron"}` schedules: conservative — `max(1,
  *     floor(holdMs / 60_000))` (one tick per minute is the most-frequent
  *     realistic cron interval). Marked approximate.
@@ -680,23 +729,28 @@ export async function reconcileMaintenancePhaseTransition(
  *     that was due. Default to 1, marked approximate.
  *   - `{kind: "on-exit"}` / `{kind: "stream"}` event-driven: undefined
  *     — no time axis means "missed ticks" is meaningless.
+ *
+ * The phase-exit reconciler passes the larger of (held-entry span) and
+ * (nowMs - maintenancePhaseEnteredAtMs) as the hold duration so a job
+ * deferred once at the start of a 3-hour window still reports the
+ * full 3 hours, not 0.
  */
 function estimateMissedScheduleTicks(
   schedule: import("./types.js").CronSchedule,
-  entry: { firstDeferredAtMs: number; lastDeferredAtMs: number },
+  holdMs: number,
 ): { count: number; approximate: boolean } | undefined {
-  const holdMs = Math.max(0, entry.lastDeferredAtMs - entry.firstDeferredAtMs);
+  const safeHoldMs = Math.max(0, holdMs);
   switch (schedule.kind) {
     case "every": {
       const everyMs = Math.max(1, schedule.everyMs);
-      const count = Math.max(1, Math.floor(holdMs / everyMs));
+      const count = Math.max(1, Math.floor(safeHoldMs / everyMs));
       return { count, approximate: false };
     }
     case "cron": {
       // Conservative: a cron job fires at most once per minute. The
-      // estimate is `max(1, floor(holdMs / 60s))` so a 3-hour hold on a
-      // 15-minute cron job reports ~12 missed ticks.
-      const count = Math.max(1, Math.floor(holdMs / 60_000));
+      // estimate is `max(1, floor(holdMs / 60s))` so a 2-hour hold on
+      // a 5-minute cron job reports ~24 missed ticks.
+      const count = Math.max(1, Math.floor(safeHoldMs / 60_000));
       return { count, approximate: true };
     }
     case "at": {

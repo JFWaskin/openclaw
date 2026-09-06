@@ -532,6 +532,20 @@ export const CronJobStateSchema = closedObject({
   // actually wants when it asks "did 12 ticks get skipped?".
   missedScheduleTicksEstimate: Type.Optional(Type.Integer({ minimum: 0 })),
   missedScheduleTicksEstimateIsApproximate: Type.Optional(Type.Boolean()),
+  // Number of schedule ticks intentionally coalesced (suppressed without
+  // replay) during the most recent maintenance window. Equals
+  // `missedScheduleTicksEstimate - 1` when the held job was replayed at
+  // phase exit (the canonical "one run per job, latest schedule wins"
+  // path) or `missedScheduleTicksEstimate` when the held job was not
+  // replayed (e.g. an `at` job whose target instant fell inside the
+  // window and was already past by exit time).
+  //
+  // Operators reading "how many runs were intentionally suppressed?" use
+  // this field directly instead of re-deriving the arithmetic from
+  // `lastRunAtMs`. Like `missedScheduleTicksEstimate`, this is
+  // overwritten on each phase exit and is not cumulative — the lifetime
+  // hold-event count lives in `deferredMaintenanceCount`.
+  lastMaintenanceCoalescedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   // Transient replay priority: set by the phase-exit mirror and cleared
   // after the deferred job is admitted. Reported for diagnostics; not
   // patchable. Distinct from the historical `lastDeferredMaintenanceAtMs`

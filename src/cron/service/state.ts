@@ -304,6 +304,20 @@ export type CronServiceState = {
    * bumped on entry and the backlog is drained on exit.
    */
   lastMaintenancePhase?: "normal" | "maintenance";
+  /**
+   * Wall-clock instant the most recent maintenance phase began. Set when
+   * `lastMaintenancePhase` transitions to `"maintenance"`, cleared when
+   * the phase exits. The phase-exit reconciler uses this to compute the
+   * actual hold duration (not just the time between the first and last
+   * deferral events) so a job deferred once at the start of a 3-hour
+   * window correctly reports the full 3 hours of held time.
+   *
+   * Cleared back to `undefined` at phase exit so a stale value can
+   * never leak into the next phase. The `lastMaintenancePhase`
+   * sentinel alone is not enough — both fields together guard the
+   * "we are inside maintenance" / "we just exited maintenance" detection.
+   */
+  maintenancePhaseEnteredAtMs?: number | null;
 };
 
 /** Creates mutable cron service state with a concrete clock dependency. */

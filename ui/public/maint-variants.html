@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenClaw · State Variants</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#0e0e10; color:#e6e6e6; }
+  .variants { display:grid; grid-template-columns: 1fr 1fr; gap:18px; padding:18px; max-width:1700px; margin:0 auto; }
+  .card { background:#18181b; border:1px solid #2a2a2e; border-radius:10px; padding:14px 16px; }
+  .card h3 { font-size:11px; text-transform:uppercase; color:#8b8b95; margin:0 0 8px; letter-spacing:0.5px; }
+  pre { background:#0a0a0c; border:1px solid #2a2a2e; border-radius:8px; padding:10px 12px; margin:0; font:11px/1.4 ui-monospace, monospace; color:#d4d4d8; white-space:pre-wrap; }
+  .var1 { background:#0e2e1c; border-color:#16a34a; padding:8px 12px; border-radius:8px; color:#86efac; }
+  .var2 { background:#3b1414; border-color:#ef4444; padding:8px 12px; border-radius:8px; color:#fda4af; }
+  .var3 { background:#1e1b4b; border-color:#4f46e5; padding:8px 12px; border-radius:8px; color:#a5b4fc; }
+  .var4 { background:#27272a; border-color:#52525b; padding:8px 12px; border-radius:8px; color:#a1a1aa; }
+</style>
+</head>
+<body>
+<div class="variants">
+  <div class="card">
+    <h3>V1 · disabled (normal running)</h3>
+    <pre>{
+  "maintenance": { "enabled": false, "phase": "outside" },
+  "jobs": {
+    "Memory Dreaming": { "state": "idle", "nextRun": "in 19h" },
+    "Heartbeat probe": { "state": "ok",     "nextRun": "in 4m"  },
+    "heartbeat-dev":   { "state": "ok",     "nextRun": "in 28m" }
+  }
+}</pre>
+    <div class="var1">✅ All jobs running normally</div>
+  </div>
+  <div class="card">
+    <h3>V2 · ACTIVE — 3 jobs held (current)</h3>
+    <pre>{
+  "maintenance": {
+    "enabled": true, "phase": "maintenance",
+    "window": { "start": "00:00", "end": "23:59", "tz": "Asia/Shanghai" }
+  },
+  "deferredCount": 3,
+  "jobs": {
+    "Memory Dreaming": { "state": "held", "nextRun": "overdue 4m", "lastDeferralReason": "maintenance_window" },
+    "Heartbeat probe": { "state": "held", "nextRun": "overdue 8m", "lastDeferralReason": "maintenance_window" },
+    "heartbeat-dev":   { "state": "held", "nextRun": "overdue 2m", "lastDeferralReason": "maintenance_window" }
+  }
+}</pre>
+    <div class="var2">🔴 All 3 jobs held by maintenance window</div>
+  </div>
+  <div class="card">
+    <h3>V3 · selective — only maintenance agents held</h3>
+    <pre>{
+  "maintenance": {
+    "enabled": true, "phase": "maintenance",
+    "maintenanceAgents": ["db-migrator", "index-rebuilder"]
+  },
+  "deferredCount": 1,
+  "jobs": {
+    "db-migrator":     { "state": "held", "lastDeferralReason": "maintenance_window" },
+    "Heartbeat probe": { "state": "ok",   "nextRun": "in 4m"  },
+    "heartbeat-dev":   { "state": "ok",   "nextRun": "in 28m" }
+  }
+}</pre>
+    <div class="var3">🎯 Only maintenance-tagged agents held</div>
+  </div>
+  <div class="card">
+    <h3>V4 · paused — operator paused window</h3>
+    <pre>{
+  "maintenance": {
+    "enabled": false, "phase": "outside", "lastWindow": "2026-09-02 22:00–23:59"
+  },
+  "jobs": {
+    "Memory Dreaming": { "state": "ok",   "nextRun": "in 4h"  },
+    "Heartbeat probe": { "state": "ok",   "nextRun": "in 5m"  }
+  }
+}</pre>
+    <div class="var4">⏸ Window paused by operator — jobs resumed</div>
+  </div>
+</div>
+</body>
+</html>
